@@ -41,6 +41,30 @@ def test_onboarding_bound_tools() -> None:
     assert "create_purchase_order" not in bound
 
 
+def test_finance_bound_tools_exclude_wire_transfer() -> None:
+    config = load_process("finance")
+    bound = get_bound_tools(config)
+    assert "submit_expense_report" in bound
+    assert "flag_for_finance_review" in bound
+    assert "wire_transfer" not in bound
+
+
+def test_risk_rating_bound_tools_exclude_suspend() -> None:
+    config = load_process("risk_rating")
+    bound = get_bound_tools(config)
+    assert "assign_risk_rating" in bound
+    assert "request_manual_review" in bound
+    assert "suspend_account" not in bound
+
+
+def test_rag_bot_bound_tools_exclude_delete() -> None:
+    config = load_process("rag_bot")
+    bound = get_bound_tools(config)
+    assert "search_knowledge_base" in bound
+    assert "escalate_to_human_agent" in bound
+    assert "delete_knowledge_document" not in bound
+
+
 def test_execute_bound_rejects_unbound() -> None:
     config = load_process("procurement_review")
     with pytest.raises(PermissionError):

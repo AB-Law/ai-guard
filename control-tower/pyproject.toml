@@ -25,6 +25,13 @@ dev = [
     "pytest-cov",
     "ruff",
 ]
+# Only needed for the sqlite/postgres storage tiers (DATABASE_URL set) — the
+# default in-memory/sqlite-audit-log tier needs none of this.
+scale = [
+    "langgraph-checkpoint-sqlite",
+    "langgraph-checkpoint-postgres",
+    "psycopg[binary]",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
@@ -50,8 +57,9 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "live: tests that call the live OpenAI API",
+    "postgres: tests that need AEGIS_TEST_POSTGRES_URL (a running Postgres)",
 ]
-addopts = "-m 'not live'"
+addopts = "-m 'not live and not postgres'"
 
 [tool.ruff]
 line-length = 100

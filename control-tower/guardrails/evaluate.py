@@ -37,7 +37,9 @@ def evaluate_tool_call(
         )
 
     chunks = context_chunks if context_chunks is not None else (retrieved_texts or [])
-    verification = output_verifier.verify(request.agent_rationale, chunks)
+    verification = output_verifier.verify_evidence(
+        request.agent_rationale, chunks, request_facts=request.tool_args
+    )
 
     policy_hit = gateway.classify_policy_hit(request, config)
     risk_score, confidence_score, evidence_score = risk_scorer.score(

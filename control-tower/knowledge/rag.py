@@ -200,31 +200,42 @@ class KnowledgeBase:
 UPLOADS_DIRNAME = "uploads"
 
 
-def uploads_dir(project_root: Path | None = None) -> Path:
-    """Directory documents uploaded live via the API/dashboard are saved into."""
+def uploads_dir(project_root: Path | None = None, process: str | None = None) -> Path:
+    """Directory for live uploads; process-scoped under data/uploads/<process>/."""
     root = project_root or _PROJECT_ROOT
-    return root / "data" / UPLOADS_DIRNAME
+    base = root / "data" / UPLOADS_DIRNAME
+    if process is None:
+        raise TypeError("uploads_dir() requires process= (per-process upload isolation)")
+    return base / process
 
 
-def default_seed_paths(project_root: Path | None = None) -> list[Path]:
-    """Union of all known process KB paths, injected quote, and any live uploads."""
+def _seed_pack_includes_injected_quote(knowledge_base_paths: list[str]) -> bool:
+    """Demo injection fixture ships with the procurement seed pack (vendor master)."""
+    return any("vendor_master" in Path(raw).name for raw in knowledge_base_paths)
+
+
+def seed_paths_for_process(
+    process: str, project_root: Path | None = None
+) -> list[Path]:
+    """KB seed paths for a single process: config paths, its uploads, and demo injection."""
     root = project_root or _PROJECT_ROOT
-    from configs.loader import KNOWN_PROCESSES, load_process
+    from configs.loader import load_process
 
+    config = load_process(process)
     paths: list[Path] = []
     seen: set[Path] = set()
-    for name in KNOWN_PROCESSES:
-        config = load_process(name)
-        for raw in config.knowledge_base_paths:
-            path = root / raw if not Path(raw).is_absolute() else Path(raw)
-            resolved = path.resolve()
-            if resolved not in seen:
-                seen.add(resolved)
-                paths.append(path)
-    injected = root / "data" / "injected_quote_malicious.txt"
-    if injected.is_file() and injected.resolve() not in seen:
-        paths.append(injected)
-    uploads = uploads_dir(root)
+    for raw in config.knowledge_base_paths:
+        path = root / raw if not Path(raw).is_absolute() else Path(raw)
+        resolved = path.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            paths.append(path)
+    if _seed_pack_includes_injected_quote(config.knowledge_base_paths):
+        injected = root / "data" / "injected_quote_malicious.txt"
+        if injected.is_file() and injected.resolve() not in seen:
+            seen.add(injected.resolve())
+            paths.append(injected)
+    uploads = uploads_dir(root, process)
     if uploads.is_dir():
         for path in sorted(uploads.iterdir()):
             if path.is_file() and path.resolve() not in seen:
@@ -232,8 +243,34 @@ def default_seed_paths(project_root: Path | None = None) -> list[Path]:
                 paths.append(path)
     return paths
 
+def default_seed_paths(project_root: Path | None = None) -> list[Path]:
+    """Union of all known process KB paths, injected quote, and process-scoped uploads."""
+    root = project_root or _PROJECT_ROOT
+    from configs.loader import KNOWN_PROCESSES
+
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for name in KNOWN_PROCESSES:
+        for path in seed_paths_for_process(name, root):
+            resolved = path.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                paths.append(path)
+    return paths
+
+
+def build_kb_for_process(
+    process: str, project_root: Path | None = None
+) -> KnowledgeBase:
+    """Build an in-memory KB indexed only with that process's seed docs + uploads."""
+    root = project_root or _PROJECT_ROOT
+    kb = KnowledgeBase(collection_name=f"aegis_kb_{process}")
+    kb.index_seed(seed_paths_for_process(process, root), project_root=root)
+    return kb
+
 
 def build_default_kb(project_root: Path | None = None) -> KnowledgeBase:
+    """Full-corpus KB (all processes) — for investigation / legacy callers."""
     root = project_root or _PROJECT_ROOT
     kb = KnowledgeBase()
     kb.index_seed(default_seed_paths(root), project_root=root)

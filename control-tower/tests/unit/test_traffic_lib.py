@@ -5,13 +5,14 @@ from __future__ import annotations
 import random
 
 from scripts.traffic_lib import (
+    _DEMO_TRAFFIC_SOURCE_APP,
     _PROFILE_WEIGHTS,
     generate_batch,
     random_submit_body,
     run_traffic,
 )
 
-_REQUIRED_KEYS = {"process", "case_id", "request"}
+_REQUIRED_KEYS = {"process", "case_id", "request", "source_app"}
 
 
 def test_random_submit_body_shape() -> None:
@@ -20,6 +21,7 @@ def test_random_submit_body_shape() -> None:
     assert _REQUIRED_KEYS <= body.keys()
     assert body["process"] in {"procurement_review", "onboarding_kyc"}
     assert body["case_id"].startswith("sim-00000-")
+    assert body["source_app"] == _DEMO_TRAFFIC_SOURCE_APP
     assert "vendor_id" in body["request"]
     assert "amount" in body["request"]
 

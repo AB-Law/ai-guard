@@ -8,7 +8,13 @@ import yaml
 from pydantic import BaseModel, Field
 
 _CONFIGS_DIR = Path(__file__).resolve().parent
-KNOWN_PROCESSES = ("procurement_review", "onboarding_kyc")
+KNOWN_PROCESSES = (
+    "procurement_review",
+    "onboarding_kyc",
+    "finance",
+    "risk_rating",
+    "rag_bot",
+)
 _KNOWN_PROCESSES = KNOWN_PROCESSES
 
 

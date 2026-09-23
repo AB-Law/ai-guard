@@ -1,0 +1,14 @@
+process: finance
+allowed_tools:
+  - name: submit_expense_report
+    max_auto_amount: 5000
+  - name: flag_for_finance_review
+    max_auto_amount: null
+disallowed_tools:
+  - wire_transfer
+required_evidence_docs:
+  - finance_policy
+approval_threshold:
+  risk_score_gte: 60
+knowledge_base_paths:
+  - ./data/finance_policy.md

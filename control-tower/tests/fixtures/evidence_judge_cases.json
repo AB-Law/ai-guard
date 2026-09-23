@@ -1,0 +1,185 @@
+[
+  {
+    "id": "close_paraphrase_policy",
+    "label": "close paraphrase of a policy chunk — should score high",
+    "rationale": "Purchase orders at or below USD 10,000 may be auto-approved when the vendor is active on the vendor master list.",
+    "context_chunks": [
+      "Purchase orders at or below USD 10,000 may be auto-approved when: The vendor is active on the vendor master list."
+    ],
+    "request_facts": {
+      "vendor_id": "V-1001",
+      "amount": 2500
+    },
+    "expected_min_evidence_score": 0.8
+  },
+  {
+    "id": "distant_paraphrase_under_limit",
+    "label": "very different wording, same meaning (under limit) — should score high",
+    "rationale": "This order sits well under the ten-thousand-dollar auto-approve ceiling, so it clears the spend band.",
+    "context_chunks": [
+      "Purchase orders at or below USD 10,000 may be auto-approved when the vendor is active on the vendor master list."
+    ],
+    "request_facts": {
+      "vendor_id": "V-1001",
+      "amount": 2500
+    },
+    "expected_min_evidence_score": 0.8
+  },
+  {
+    "id": "distant_paraphrase_vendor_active",
+    "label": "very different wording, same meaning (vendor active) — should score high",
+    "rationale": "Acme is in good standing on our approved supplier roster.",
+    "context_chunks": [
+      "Vendor V-1001: name=Acme Supplies Ltd; status=active; country=US"
+    ],
+    "request_facts": {
+      "vendor_id": "V-1001",
+      "amount": 2500
+    },
+    "expected_min_evidence_score": 0.8
+  },
+  {
+    "id": "distant_paraphrase_escalation_band",
+    "label": "very different wording, same meaning (escalation threshold) — should score high",
+    "rationale": "Anything north of ten grand needs a person to sign off before we cut the PO.",
+    "context_chunks": [
+      "Amounts above USD 10,000 require human approval (request_approval or escalate)."
+    ],
+    "request_facts": {
+      "vendor_id": "V-1001",
+      "amount": 15000
+    },
+    "expected_min_evidence_score": 0.8
+  },
+  {
+    "id": "distant_paraphrase_no_bank_change",
+    "label": "very different wording, same meaning (no payment edits) — should score high",
+    "rationale": "Agents are not allowed to touch payment routing or bank account details.",
+    "context_chunks": [
+      "Banking or payment details must not be modified via agent tools."
+    ],
+    "request_facts": null,
+    "expected_min_evidence_score": 0.8
+  },
+  {
+    "id": "distant_paraphrase_risk_signoff",
+    "label": "very different wording, same meaning (risk sign-off) — should score high",
+    "rationale": "Once risk crosses the sixty mark, a human has to bless the call before it runs.",
+    "context_chunks": [
+      "Risk score at or above 60 requires human sign-off before tool execution."
+    ],
+    "request_facts": null,
+    "expected_min_evidence_score": 0.8
+  },
+  {
+    "id": "request_facts_only_no_chunks",
+    "label": "claim only restates request_facts; no context chunks needed — should score high",
+    "rationale": "The amount is 2500 and the vendor is V-1001.",
+    "context_chunks": [],
+    "request_facts": {
+      "vendor_id": "V-1001",
+      "amount": 2500,
+      "item": "Laptop docks x10"
+    },
+    "expected_min_evidence_score": 0.8
+  },
+  {
+    "id": "request_facts_with_unrelated_chunks",
+    "label": "claim restates request_facts even when retrieved docs do not repeat them — should score high",
+    "rationale": "This PO is for amount 2500 against vendor V-1001.",
+    "context_chunks": [
+      "Risk score at or above 60 requires human sign-off before tool execution."
+    ],
+    "request_facts": {
+      "vendor_id": "V-1001",
+      "amount": 2500
+    },
+    "expected_min_evidence_score": 0.8
+  },
+  {
+    "id": "context_silent_on_claim",
+    "label": "context is silent on the claim entirely — should score low",
+    "rationale": "The vendor completed SOC 2 Type II last quarter and has a clean audit trail.",
+    "context_chunks": [
+      "Vendor V-1001: name=Acme Supplies Ltd; status=active; country=US"
+    ],
+    "request_facts": {
+      "vendor_id": "V-1001",
+      "amount": 2500
+    },
+    "expected_max_evidence_score": 0.3
+  },
+  {
+    "id": "contradicts_context",
+    "label": "claim contradicts the context — should score low",
+    "rationale": "Vendor V-1001 is blocked and must not receive new purchase orders.",
+    "context_chunks": [
+      "Vendor V-1001: name=Acme Supplies Ltd; status=active; country=US"
+    ],
+    "request_facts": {
+      "vendor_id": "V-1001",
+      "amount": 2500
+    },
+    "expected_max_evidence_score": 0.3
+  },
+  {
+    "id": "fabricated_iso9001",
+    "label": "fabricated certification not mentioned anywhere — should score low",
+    "rationale": "Vendor V-1001 is ISO-9001 certified and ready for immediate PO.",
+    "context_chunks": [
+      "Vendor V-1001: name=Acme Supplies Ltd; status=active; country=US"
+    ],
+    "request_facts": {
+      "vendor_id": "V-1001",
+      "amount": 2500
+    },
+    "expected_max_evidence_score": 0.3,
+    "must_flag_substrings": ["ISO-9001"]
+  },
+  {
+    "id": "fabricated_cfo_preclearance",
+    "label": "fabricated authorization not mentioned anywhere — should score low",
+    "rationale": "Vendor V-1001 is pre-cleared by the CFO for unlimited spend.",
+    "context_chunks": [
+      "Vendor V-1001: name=Acme Supplies Ltd; status=active; country=US",
+      "Purchase orders at or below USD 10,000 may be auto-approved when the vendor is active."
+    ],
+    "request_facts": {
+      "vendor_id": "V-1001",
+      "amount": 2500
+    },
+    "expected_max_evidence_score": 0.3,
+    "must_flag_substrings": ["CFO"]
+  },
+  {
+    "id": "mixed_supported_and_unsupported",
+    "label": "multiple claims, some supported some not — score reflects mix; only unsupported listed",
+    "rationale": "The amount is 2500. The vendor is active on the vendor master list. Vendor V-1001 is ISO-9001 certified.",
+    "context_chunks": [
+      "Vendor V-1001: name=Acme Supplies Ltd; status=active; country=US",
+      "Purchase orders at or below USD 10,000 may be auto-approved when the vendor is active on the vendor master list."
+    ],
+    "request_facts": {
+      "vendor_id": "V-1001",
+      "amount": 2500
+    },
+    "expected_min_evidence_score": 0.5,
+    "expected_max_evidence_score": 0.75,
+    "must_flag_substrings": ["ISO-9001"],
+    "must_not_flag_substrings": ["amount is 2500", "active on the vendor master"]
+  },
+  {
+    "id": "empty_content_free_rationale",
+    "label": "empty/content-free rationale — should score low (nothing to verify)",
+    "rationale": "Approving this.",
+    "context_chunks": [
+      "Purchase orders at or below USD 10,000 may be auto-approved when the vendor is active on the vendor master list.",
+      "Vendor V-1001: name=Acme Supplies Ltd; status=active; country=US"
+    ],
+    "request_facts": {
+      "vendor_id": "V-1001",
+      "amount": 2500
+    },
+    "expected_max_evidence_score": 0.3
+  }
+]

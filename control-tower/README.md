@@ -2,7 +2,7 @@
 
 Governance layer around enterprise agents: tool-call gateway, audit trail, and policy-driven process configs. Demo process: procurement review (with a second `onboarding_kyc` config proving the accelerator claim).
 
-See [BUILD.md](./BUILD.md) for the phased build plan/progress tracker and [ARCHITECTURE.md](./ARCHITECTURE.md) for the design.
+See [BUILD.md](./BUILD.md) for the phased build plan/progress tracker and [ARCHITECTURE.md](./ARCHITECTURE.md) for the design. For governing calls from *your own* agent (LangChain or plain Python) without going through this app's case/process model, see [sdk/aiguard/README.md](sdk/aiguard/README.md).
 
 ## Setup
 
@@ -64,10 +64,12 @@ The API writes to `data/audit.db` by default (auto-created).
 Ingest a new document live (no restart — indexed into the running agent's KB immediately):
 
 ```bash
-curl -X POST http://127.0.0.1:8000/knowledge/documents -F "file=@path/to/new_policy.md"
+curl -X POST http://127.0.0.1:8000/knowledge/documents \
+  -F "file=@path/to/new_policy.md" \
+  -F "process=procurement_review"
 ```
 
-Saved under `data/uploads/` and picked up automatically by `default_seed_paths()`, so the investigation assistant can also cite it once a case's audit trail references it. In the dashboard this is a sidebar **Knowledge base → Add document** upload — no curl needed.
+Saved under `data/uploads/<process>/` and picked up by that process's KB (and by `default_seed_paths()` for investigation). Other processes cannot retrieve it. In the dashboard this is a sidebar **Knowledge base → Add document** upload with a process selector — no curl needed.
 
 ## Run the dashboard
 
@@ -109,6 +111,41 @@ python -c "from scripts.traffic_lib import generate_batch; import json; print(js
 ```
 
 Or click **Simulate traffic burst** in the dashboard sidebar to fire a synchronous batch (5–100 cases) and watch Live traffic fill up immediately.
+
+## Storage backends
+
+The default (no `DATABASE_URL` set) keeps case state and LangGraph's HITL checkpoint in memory — fast to start, but **that state is per-process**: a second uvicorn worker, a second replica, or a restart won't see it. `DATABASE_URL` picks a different tier:
+
+| `DATABASE_URL` | Audit log | Case store + checkpoint | Survives restart? | Safe with >1 worker? |
+|---|---|---|---|---|
+| unset (default) | SQLite file | in-memory | audit only | no |
+| `sqlite` | SQLite file | SQLite file | yes | no (single-writer file) |
+| `postgresql://...` | Postgres | Postgres | yes | **yes** |
+
+Run the full stack with Postgres and multiple API workers via Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+Brings up `db` (Postgres, internal-only — no host port published by default), `api` (`uvicorn --workers 4`, `http://localhost:8000`), and `dashboard` (`http://localhost:8501`). Because case/checkpoint state now lives in Postgres instead of each worker's own memory, a request answered by one worker is visible to another — verified by `tests/e2e/test_storage_backends.py`, which submits a case on one `create_app()` instance and resumes its HITL approval on a completely separate one sharing the same backend.
+
+Data persists in a named Docker volume (`aegis_pgdata`) across `docker compose down`/`up`; add `-v` to wipe it.
+
+Local dev without Docker, still fully persisted:
+
+```bash
+pip install -e ".[scale]"   # psycopg + langgraph-checkpoint-sqlite/postgres
+set DATABASE_URL=sqlite
+uvicorn api.main:app --reload
+```
+
+Postgres-tier tests need a real Postgres and are skipped by default (mirrors the `@pytest.mark.live` pattern):
+
+```bash
+docker run -d -e POSTGRES_USER=aegis -e POSTGRES_PASSWORD=aegis -e POSTGRES_DB=aegis -p 5544:5432 postgres:16-alpine
+AEGIS_TEST_POSTGRES_URL=postgresql://aegis:aegis@localhost:5544/aegis pytest -m postgres
+```
 
 ## Run scenario fixtures (no API/dashboard needed)
 
@@ -174,5 +211,7 @@ control-tower/
 ├── dashboard/          # Streamlit UI
 ├── investigation_assistant/  # RAG over the audit log ("why was this flagged")
 ├── scripts/            # run_scenario.py, demo_seed.py, verify_audit_chain.py, traffic_sim.py/traffic_lib.py
+├── sdk/aiguard/        # separate installable package — see sdk/aiguard/README.md
+├── Dockerfile, docker-compose.yml  # api + dashboard + Postgres, see "Storage backends"
 └── tests/              # unit / contract / integration / e2e + fixtures
 ```

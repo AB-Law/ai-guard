@@ -156,6 +156,11 @@ _BUILDERS = {
 }
 
 
+# Label for dashboard Connected-applications / per-row chips. Keep stable —
+# traffic_sim CLI and the dashboard burst button both post these bodies as-is.
+_DEMO_TRAFFIC_SOURCE_APP = "Aegis Demo Traffic"
+
+
 def random_submit_body(rng: random.Random, *, seq: int) -> dict[str, Any]:
     """One POST /cases body for a randomly chosen risk profile."""
     profile = rng.choices(
@@ -164,7 +169,9 @@ def random_submit_body(rng: random.Random, *, seq: int) -> dict[str, Any]:
     # Derived from rng (not uuid4) so a given seed reproduces identical case_ids.
     suffix = f"{rng.getrandbits(24):06x}"
     case_id = f"sim-{seq:05d}-{profile}-{suffix}"
-    return _BUILDERS[profile](rng, case_id)
+    body = _BUILDERS[profile](rng, case_id)
+    body["source_app"] = _DEMO_TRAFFIC_SOURCE_APP
+    return body
 
 
 def generate_batch(n: int, *, seed: int | None = None) -> list[dict[str, Any]]:

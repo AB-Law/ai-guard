@@ -3,7 +3,7 @@
 from guardrails.evaluate import evaluate_tool_call
 from guardrails.gateway import classify_policy_hit, decide
 from guardrails.injection_guard import scan
-from guardrails.output_verifier import verify
+from guardrails.output_verifier import verify, verify_evidence
 from guardrails.risk_scorer import score
 
 __all__ = [
@@ -12,5 +12,6 @@ __all__ = [
     "decide",
     "scan",
     "verify",
+    "verify_evidence",
     "score",
 ]

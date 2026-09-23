@@ -15,6 +15,7 @@ from dashboard.view_models import (
     make_live_case_id,
     offline_investigate_mock,
     pending_approvals,
+    relative_age,
     request_to_display,
     short_timestamp,
     status_badge_kind,
@@ -133,6 +134,44 @@ def test_request_to_display_ordered() -> None:
     assert ("extra", "x") in pairs
 
 
+def test_submit_case_form_specs_differ_by_process() -> None:
+    from dashboard.view_models import (
+        build_submit_case_request,
+        submit_case_form_spec,
+        submit_case_source_app,
+    )
+
+    finance = submit_case_form_spec("finance")
+    risk = submit_case_form_spec("risk_rating")
+    rag = submit_case_form_spec("rag_bot")
+    proc = submit_case_form_spec("procurement_review")
+
+    assert finance["party_label"] == "Employee ID"
+    assert finance["detail_default"] == "Client workshop travel"
+    assert risk["party_label"] == "Customer ID"
+    assert risk["amount_label"] == "Severity (1-5)"
+    assert rag["detail_label"] == "Question"
+    assert rag["show_amount"] is False
+    assert proc["detail_default"] == "Laptop docks x10"
+
+    assert submit_case_source_app("finance") == "finance_app"
+    assert submit_case_source_app("rag_bot") == "rag_bot_app"
+    assert submit_case_source_app("procurement_review") is None
+
+    fin_req = build_submit_case_request(
+        "finance", party_id="E-9", amount=900.0, detail="Team offsite catering"
+    )
+    assert fin_req["employee_id"] == "E-9"
+    assert fin_req["vendor_id"] == "E-9"
+    assert fin_req["item"] == "Team offsite catering"
+
+    rag_req = build_submit_case_request(
+        "rag_bot", party_id="U-1", amount=0.0, detail="How do I reset my password?"
+    )
+    assert rag_req["query"] == "How do I reset my password?"
+    assert rag_req["item"] == "How do I reset my password?"
+
+
 def test_offline_investigate_mock() -> None:
     mock = offline_investigate_mock(
         "Why?",
@@ -216,3 +255,29 @@ def test_short_timestamp() -> None:
     assert short_timestamp("2026-01-01T14:30:05+00:00") == "14:30:05"
     assert short_timestamp("14:30:05") == "14:30:05"
     assert short_timestamp(None) == ""
+
+
+def test_relative_age() -> None:
+    now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    assert relative_age("2026-01-01T11:59:50+00:00", now=now) == "now"
+    assert relative_age("2026-01-01T11:50:00+00:00", now=now) == "10m"
+    assert relative_age("2026-01-01T09:00:00+00:00", now=now) == "3h"
+    assert relative_age("2025-12-30T12:00:00+00:00", now=now) == "2d"
+    assert relative_age(None, now=now) == ""
+
+
+def test_traffic_event_blurb() -> None:
+    from dashboard.view_models import traffic_event_blurb
+
+    blurb = traffic_event_blurb(
+        {
+            "stages": ["retrieval", "injection_flag", "policy_check"],
+            "decision": "escalate",
+            "reason": "Prompt injection indicators detected",
+            "tool_name": "answer_from_docs",
+        }
+    )
+    assert "Injection flagged" in blurb
+    assert "needs human approval" in blurb
+    assert "answer_from_docs" in blurb
+    assert "Prompt injection" in blurb

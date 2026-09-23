@@ -44,3 +44,37 @@ def test_onboarding_and_procurement_tool_sets_differ() -> None:
     kyc = load_process("onboarding_kyc")
     assert {t.name for t in proc.allowed_tools} != {t.name for t in kyc.allowed_tools}
     assert set(proc.disallowed_tools) != set(kyc.disallowed_tools)
+
+
+def test_load_finance() -> None:
+    cfg = load_process("finance")
+    assert cfg.process == "finance"
+    assert cfg.approval_threshold.risk_score_gte == 60
+    allowed = {t.name for t in cfg.allowed_tools}
+    assert allowed == {"submit_expense_report", "flag_for_finance_review"}
+    expense = next(t for t in cfg.allowed_tools if t.name == "submit_expense_report")
+    assert expense.max_auto_amount == 5000
+    assert "wire_transfer" in cfg.disallowed_tools
+    assert any("finance_policy" in p for p in cfg.knowledge_base_paths)
+
+
+def test_load_risk_rating() -> None:
+    cfg = load_process("risk_rating")
+    assert cfg.process == "risk_rating"
+    allowed = {t.name for t in cfg.allowed_tools}
+    assert allowed == {"assign_risk_rating", "request_manual_review"}
+    rating = next(t for t in cfg.allowed_tools if t.name == "assign_risk_rating")
+    assert rating.max_auto_amount == 3
+    assert "suspend_account" in cfg.disallowed_tools
+    assert any("risk_rating_policy" in p for p in cfg.knowledge_base_paths)
+
+
+def test_load_rag_bot() -> None:
+    cfg = load_process("rag_bot")
+    assert cfg.process == "rag_bot"
+    allowed = {t.name for t in cfg.allowed_tools}
+    assert allowed == {"search_knowledge_base", "escalate_to_human_agent"}
+    search = next(t for t in cfg.allowed_tools if t.name == "search_knowledge_base")
+    assert search.max_auto_amount is None
+    assert "delete_knowledge_document" in cfg.disallowed_tools
+    assert any("rag_bot_policy" in p for p in cfg.knowledge_base_paths)

@@ -12,6 +12,9 @@ DISALLOWED_TOOL_STUBS = (
     "send_payment",
     "modify_vendor_banking_details",
     "disburse_funds",
+    "wire_transfer",
+    "suspend_account",
+    "delete_knowledge_document",
 )
 
 
@@ -110,6 +113,162 @@ def disburse_funds(**kwargs: Any) -> dict[str, Any]:
     raise RuntimeError("disburse_funds must not execute; gateway should block first")
 
 
+def submit_expense_report(
+    *,
+    employee_id: str | None = None,
+    vendor_id: str | None = None,
+    amount: float,
+    item: str | None = None,
+    side_effects: ToolSideEffects | None = None,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """Finance — submit an expense report (demo stub)."""
+    eid = employee_id or vendor_id or "unknown"
+    result = {
+        "status": "submitted",
+        "expense_id": f"EXP-{eid}-{int(amount)}",
+        "employee_id": eid,
+        "amount": amount,
+        "item": item,
+    }
+    if side_effects is not None:
+        side_effects.record("submit_expense_report", **result)
+    return result
+
+
+def flag_for_finance_review(
+    *,
+    call_id: str | None = None,
+    reason: str | None = None,
+    employee_id: str | None = None,
+    vendor_id: str | None = None,
+    amount: float | None = None,
+    item: str | None = None,
+    side_effects: ToolSideEffects | None = None,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """Finance — low-friction escalate to a human finance reviewer."""
+    eid = employee_id or vendor_id
+    result = {
+        "status": "finance_review_requested",
+        "call_id": call_id,
+        "reason": reason or "finance review requested",
+        "employee_id": eid,
+        "amount": amount,
+        "item": item,
+    }
+    if side_effects is not None:
+        side_effects.record("flag_for_finance_review", **result)
+    return result
+
+
+def wire_transfer(**kwargs: Any) -> dict[str, Any]:
+    """Stub — must never be bound to the agent tool registry."""
+    raise RuntimeError("wire_transfer must not execute; gateway should block first")
+
+
+def assign_risk_rating(
+    *,
+    customer_id: str | None = None,
+    vendor_id: str | None = None,
+    amount: float,
+    rating: str | None = None,
+    item: str | None = None,
+    side_effects: ToolSideEffects | None = None,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """Risk rating — write a severity score (amount = 1–5 scale for gateway)."""
+    cid = customer_id or vendor_id or "unknown"
+    result = {
+        "status": "rated",
+        "customer_id": cid,
+        "severity": amount,
+        "rating": rating or f"severity-{int(amount)}",
+        "item": item,
+    }
+    if side_effects is not None:
+        side_effects.record("assign_risk_rating", **result)
+    return result
+
+
+def request_manual_review(
+    *,
+    call_id: str | None = None,
+    reason: str | None = None,
+    customer_id: str | None = None,
+    vendor_id: str | None = None,
+    amount: float | None = None,
+    item: str | None = None,
+    side_effects: ToolSideEffects | None = None,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """Risk rating — request a human risk analyst review."""
+    cid = customer_id or vendor_id
+    result = {
+        "status": "manual_review_requested",
+        "call_id": call_id,
+        "reason": reason or "manual risk review requested",
+        "customer_id": cid,
+        "amount": amount,
+        "item": item,
+    }
+    if side_effects is not None:
+        side_effects.record("request_manual_review", **result)
+    return result
+
+
+def suspend_account(**kwargs: Any) -> dict[str, Any]:
+    """Stub — must never be bound to the agent tool registry."""
+    raise RuntimeError("suspend_account must not execute; gateway should block first")
+
+
+def search_knowledge_base(
+    *,
+    query: str | None = None,
+    item: str | None = None,
+    side_effects: ToolSideEffects | None = None,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """RAG bot — read-only knowledge search (demo stub)."""
+    q = query or item or ""
+    result = {
+        "status": "ok",
+        "query": q,
+        "hits": [{"snippet": f"(demo) results for: {q}"}],
+    }
+    if side_effects is not None:
+        side_effects.record("search_knowledge_base", **result)
+    return result
+
+
+def escalate_to_human_agent(
+    *,
+    call_id: str | None = None,
+    reason: str | None = None,
+    query: str | None = None,
+    item: str | None = None,
+    side_effects: ToolSideEffects | None = None,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """RAG bot — hand off to a human agent."""
+    result = {
+        "status": "escalated_to_human",
+        "call_id": call_id,
+        "reason": reason or "human agent requested",
+        "query": query or item,
+    }
+    if side_effects is not None:
+        side_effects.record("escalate_to_human_agent", **result)
+    return result
+
+
+def delete_knowledge_document(**kwargs: Any) -> dict[str, Any]:
+    """Stub — must never be bound to the agent tool registry."""
+    raise RuntimeError(
+        "delete_knowledge_document must not execute; gateway should block first"
+    )
+
+
 _TOOL_IMPLS: dict[str, Callable[..., dict[str, Any]]] = {
     "create_purchase_order": create_purchase_order,
     "request_approval": request_approval,
@@ -117,6 +276,15 @@ _TOOL_IMPLS: dict[str, Callable[..., dict[str, Any]]] = {
     "send_payment": send_payment,
     "modify_vendor_banking_details": modify_vendor_banking_details,
     "disburse_funds": disburse_funds,
+    "submit_expense_report": submit_expense_report,
+    "flag_for_finance_review": flag_for_finance_review,
+    "wire_transfer": wire_transfer,
+    "assign_risk_rating": assign_risk_rating,
+    "request_manual_review": request_manual_review,
+    "suspend_account": suspend_account,
+    "search_knowledge_base": search_knowledge_base,
+    "escalate_to_human_agent": escalate_to_human_agent,
+    "delete_knowledge_document": delete_knowledge_document,
 }
 
 

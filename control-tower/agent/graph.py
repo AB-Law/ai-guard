@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -22,7 +23,7 @@ from configs.loader import ProcessConfig, load_process
 from contracts.schemas import GatewayDecision, ToolCallRequest
 from guardrails import evaluate_tool_call
 from guardrails.injection_guard import scan
-from knowledge.rag import KnowledgeBase, build_default_kb
+from knowledge.rag import KnowledgeBase, build_kb_for_process
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,13 +60,15 @@ def _decision_to_dict(decision: GatewayDecision) -> dict[str, Any]:
 def build_graph(
     *,
     audit: AuditLogStore,
-    kb: KnowledgeBase | None = None,
+    kb: KnowledgeBase
+    | Mapping[str, KnowledgeBase]
+    | Callable[[str], KnowledgeBase]
+    | None = None,
     config: ProcessConfig | None = None,
     checkpointer: MemorySaver | None = None,
     side_effects: ToolSideEffects | None = None,
 ) -> CompiledStateGraph:
-    """Compile the agent graph; process config is resolved from state at runtime."""
-    kb = kb or build_default_kb(_PROJECT_ROOT)
+    """Compile the agent graph; process config and KB are resolved from state at runtime."""
     checkpointer = checkpointer or MemorySaver()
     effects = side_effects if side_effects is not None else ToolSideEffects()
 
@@ -74,13 +77,26 @@ def build_graph(
             return config
         return load_process(state["process"])
 
+    def _resolve_kb(state: AgentState) -> KnowledgeBase:
+        process = state["process"]
+        if kb is None:
+            return build_kb_for_process(process, _PROJECT_ROOT)
+        if isinstance(kb, KnowledgeBase):
+            return kb
+        if callable(kb):
+            return kb(process)
+        if process in kb:
+            return kb[process]
+        return build_kb_for_process(process, _PROJECT_ROOT)
+
     def retrieve(state: AgentState) -> dict[str, Any]:
+        process_kb = _resolve_kb(state)
         req = state["request"]
         query = (
             f"{req.get('item', '')} vendor {req.get('vendor_id', '')} "
             "auto approve policy amount identity verification"
         ).strip()
-        chunks = kb.retrieve(query, k=6)
+        chunks = process_kb.retrieve(query, k=6)
         forced_ids = set(state.get("force_chunk_ids") or [])
         # Keep planted injection out of clean retrieval unless explicitly forced
         # (malicious quote shares line-item text with clean demos).
@@ -92,12 +108,12 @@ def build_graph(
 
         vendor_id = req.get("vendor_id")
         if vendor_id:
-            vendor_chunk = kb.get_by_id(f"chunk:vendor:{vendor_id}")
+            vendor_chunk = process_kb.get_by_id(f"chunk:vendor:{vendor_id}")
             if vendor_chunk:
                 by_id[vendor_chunk.id] = vendor_chunk
 
         for forced in forced_ids:
-            forced_chunk = kb.get_by_id(forced)
+            forced_chunk = process_kb.get_by_id(forced)
             if forced_chunk:
                 by_id[forced_chunk.id] = forced_chunk
 

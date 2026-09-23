@@ -1,0 +1,27 @@
+[project]
+name = "aiguard"
+version = "0.1.0"
+description = "Drop-in governance client for the Aegis control tower — evaluate tool calls (plain Python or LangChain) against your policy before they run."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx",
+]
+
+[project.optional-dependencies]
+# AiGuardMiddleware needs langchain>=1.0 (langchain.agents.middleware);
+# AiGuardCallbackHandler only needs langchain-core. Both come with this extra.
+langchain = ["langchain-core", "langchain>=1.0"]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aiguard*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

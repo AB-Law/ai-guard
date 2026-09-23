@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: aegis
+      POSTGRES_DB: aegis
+    # No host port published on purpose — api/dashboard reach it over the
+    # compose network as `db:5432`, and this avoids colliding with a Postgres
+    # you might already have running locally on 5432. Uncomment to psql in:
+    # ports:
+    #   - "5433:5432"
+    volumes:
+      - aegis_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegis"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    # --workers 4 is the actual point of this file: with the in-memory
+    # CaseStore/checkpointer (today's default with no DATABASE_URL), running
+    # more than one worker is broken — a request answered by worker 2 can't
+    # see a case worker 1 created. DATABASE_URL below moves that state into
+    # Postgres, which is what makes multiple workers here actually work.
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 4
+    environment:
+      DATABASE_URL: postgresql://aegis:aegis@db:5432/aegis
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./data/uploads:/app/data/uploads
+
+  dashboard:
+    build: .
+    command: streamlit run dashboard/app.py --server.address 0.0.0.0 --server.port 8501
+    environment:
+      AEGIS_API_URL: http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+
+volumes:
+  aegis_pgdata:

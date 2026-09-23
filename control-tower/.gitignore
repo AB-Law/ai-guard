@@ -15,10 +15,16 @@ dist/
 build/
 *.egg
 .pytest_cache/
+pytest-cache-files-*/
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+.tox/
+.nox/
+*.log
 
 # Runtime / local data
 *.db
@@ -34,5 +40,9 @@ data/uploads/
 # OS / IDE
 .DS_Store
 Thumbs.db
+Desktop.ini
 .idea/
 .vscode/
+.cursor/
+*.swp
+*~

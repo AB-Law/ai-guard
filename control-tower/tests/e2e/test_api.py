@@ -46,6 +46,8 @@ def test_submit_clean_case_allow(client: TestClient) -> None:
     body = resp.json()
     assert body["status"] == "completed"
     assert body["gateway_decision"]["decision"] == "allow"
+    # source_app stays optional — legacy callers that omit it must keep working.
+    assert body.get("source_app") is None
 
     audit = client.get("/cases/api-clean/audit")
     assert audit.status_code == 200
@@ -159,3 +161,93 @@ def test_list_cases_newest_first(client: TestClient) -> None:
     assert all("created_at" in c for c in cases)
     # Newest first: list-b should appear before list-a
     assert ids.index("list-b") < ids.index("list-a")
+
+
+def test_submit_with_source_app_is_stored(client: TestClient) -> None:
+    resp = client.post(
+        "/cases",
+        json={
+            "process": "procurement_review",
+            "case_id": "api-with-source",
+            "source_app": "finance_app",
+            "request": {
+                "vendor_id": "V-1001",
+                "amount": 2500,
+                "item": "Laptop docks x10",
+            },
+            "mock_agent_plan": {
+                "tool_name": "create_purchase_order",
+                "tool_args": {
+                    "vendor_id": "V-1001",
+                    "amount": 2500,
+                    "item": "Laptop docks x10",
+                },
+                "agent_rationale": (
+                    "Purchase orders at or below USD 10,000 may be auto-approved when "
+                    "the vendor is active on the vendor master list."
+                ),
+                "context_refs": ["chunk:policy:auto_approve", "chunk:vendor:V-1001"],
+            },
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["source_app"] == "finance_app"
+    got = client.get("/cases/api-with-source")
+    assert got.status_code == 200
+    assert got.json()["source_app"] == "finance_app"
+
+
+def test_upload_does_not_leak_across_processes(
+    client: TestClient, project_root: Path
+) -> None:
+    """Upload scoped to procurement_review must not be retrievable by onboarding_kyc."""
+    marker = "PROCUREMENT_ISOLATION_MARKER_ZX9Q"
+    content = (
+        f"# Isolation fixture\n\n"
+        f"Unique token {marker} for cross-process leak regression.\n"
+    ).encode("utf-8")
+    filename = "isolation_marker_zx9q.md"
+    dest: Path | None = None
+    try:
+        resp = client.post(
+            "/knowledge/documents",
+            files={"file": (filename, content, "text/markdown")},
+            data={"process": "procurement_review"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["process"] == "procurement_review"
+        assert body["chunks_added"] >= 1
+        dest = project_root / body["path"]
+
+        proc_kb = client.app.state.kbs["procurement_review"]
+        kyc_kb = client.app.state.kbs["onboarding_kyc"]
+
+        proc_hits = proc_kb.retrieve(marker, k=6)
+        assert any(marker in h.text for h in proc_hits), "positive control failed"
+
+        kyc_hits = kyc_kb.retrieve(marker, k=6)
+        assert not any(marker in h.text for h in kyc_hits)
+
+        # /guard/evaluate for onboarding must not ground on the procurement upload
+        eval_resp = client.post(
+            "/guard/evaluate",
+            json={
+                "process": "onboarding_kyc",
+                "tool_name": "verify_identity",
+                "tool_args": {"applicant_id": "A-1"},
+                "agent_rationale": (
+                    f"Applicant verified per {marker} isolation fixture policy."
+                ),
+            },
+        )
+        assert eval_resp.status_code == 200
+        # Negative: no onboarding chunk may contain the procurement-only marker.
+        for chunk_id in list(kyc_kb._docs):
+            chunk = kyc_kb.get_by_id(chunk_id)
+            assert chunk is not None
+            assert marker not in chunk.text
+    finally:
+        if dest is not None and dest.is_file():
+            dest.unlink()

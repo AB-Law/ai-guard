@@ -1,0 +1,14 @@
+process: rag_bot
+allowed_tools:
+  - name: search_knowledge_base
+    max_auto_amount: null
+  - name: escalate_to_human_agent
+    max_auto_amount: null
+disallowed_tools:
+  - delete_knowledge_document
+required_evidence_docs:
+  - rag_bot_policy
+approval_threshold:
+  risk_score_gte: 60
+knowledge_base_paths:
+  - ./data/rag_bot_policy.md

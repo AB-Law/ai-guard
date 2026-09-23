@@ -119,3 +119,84 @@ def test_limit_caps_returned_rows(client: TestClient) -> None:
     body = resp.json()
     assert len(body["cases"]) == 2
     assert body["total_cases"] == 5
+    assert body["matched"] == 5
+
+
+def test_since_minutes_filters_old_cases(client: TestClient) -> None:
+    _submit(client, "traffic-old")
+    store = client.app.state.store
+    store.cases["traffic-old"]["created_at"] = "2000-01-01T00:00:00+00:00"
+    _submit(client, "traffic-new")
+    resp = client.get("/traffic/recent", params={"since_minutes": 60})
+    body = resp.json()
+    ids = {r["case_id"] for r in body["cases"]}
+    assert "traffic-new" in ids
+    assert "traffic-old" not in ids
+    assert body["matched"] == 1
+    assert body["since_minutes"] == 60
+
+
+def test_decision_and_source_app_filters(client: TestClient) -> None:
+    _submit(client, "traffic-fin", source_app="finance_app")
+    _submit(
+        client,
+        "traffic-esc",
+        source_app="rag_bot_app",
+        request={"vendor_id": "V-1001", "amount": 50000, "item": "Server racks"},
+        mock_agent_plan={
+            "tool_name": "create_purchase_order",
+            "tool_args": {"vendor_id": "V-1001", "amount": 50000, "item": "Server racks"},
+            "agent_rationale": "This larger amount needs human approval.",
+            "context_refs": ["chunk:policy:auto_approve", "chunk:policy:escalation"],
+        },
+    )
+    by_app = client.get(
+        "/traffic/recent", params={"source_app": "finance_app"}
+    ).json()["cases"]
+    assert {r["case_id"] for r in by_app} == {"traffic-fin"}
+    by_dec = client.get(
+        "/traffic/recent", params={"decision": "escalate"}
+    ).json()["cases"]
+    assert {r["case_id"] for r in by_dec} == {"traffic-esc"}
+
+
+def test_cases_submit_source_app_appears_in_traffic_recent(client: TestClient) -> None:
+    _submit(client, "traffic-labeled-cases", source_app="finance_app")
+    row = next(
+        r
+        for r in client.get("/traffic/recent").json()["cases"]
+        if r["case_id"] == "traffic-labeled-cases"
+    )
+    assert row["source_app"] == "finance_app"
+
+
+def test_guard_evaluate_source_app_appears_in_traffic_recent(client: TestClient) -> None:
+    resp = client.post(
+        "/guard/evaluate",
+        json={
+            "process": "procurement_review",
+            "tool_name": "create_purchase_order",
+            "tool_args": {
+                "vendor_id": "V-1001",
+                "amount": 2500,
+                "item": "Laptop docks x10",
+            },
+            "agent_rationale": (
+                "Purchase orders at or below USD 10,000 may be auto-approved when "
+                "the vendor is active on the vendor master list."
+            ),
+            "context_texts": [
+                "Purchase orders at or below USD 10,000 may be auto-approved when "
+                "the vendor is active on the vendor master list."
+            ],
+            "source_app": "rag_bot_app",
+            "call_id": "traffic-guard-src",
+        },
+    )
+    assert resp.status_code == 200
+    row = next(
+        r
+        for r in client.get("/traffic/recent").json()["cases"]
+        if r["case_id"] == "guard-traffic-guard-src"
+    )
+    assert row["source_app"] == "rag_bot_app"

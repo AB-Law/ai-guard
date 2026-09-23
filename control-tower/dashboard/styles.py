@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import streamlit as st
 
+from dashboard.view_models import relative_age, short_timestamp, traffic_event_blurb
+
 _CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
@@ -290,72 +292,187 @@ h1.aegis-title {
 .traffic-id {
   font-family: "IBM Plex Mono", ui-monospace, monospace;
   color: #0f172a;
-  width: 11rem;
-  min-width: 11rem;
+  width: 10.5rem;
+  min-width: 10.5rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.traffic-time {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  color: #64748b;
+  width: 7.5rem;
+  min-width: 7.5rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.traffic-clock {
+  color: #475569;
+}
+
+.traffic-age {
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+
 .traffic-process {
   color: #64748b;
+  width: 7.5rem;
+  min-width: 7.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.traffic-source {
   width: 8.5rem;
   min-width: 8.5rem;
 }
 
-.pipeline {
-  display: flex;
-  align-items: center;
-  flex: 1;
-}
-
-.pipeline-node {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  color: #cbd5e1;
-}
-
-.pipeline-node .dot {
-  width: 0.6rem;
-  height: 0.6rem;
-  border-radius: 50%;
-  background: #e2e8f0;
-  border: 1px solid #cbd5e1;
-  flex-shrink: 0;
-}
-
-.pipeline-node.hit {
-  color: #334155;
-}
-
-.pipeline-node.hit .dot {
-  background: #14b8a6;
-  border-color: #0d9488;
-}
-
-.pipeline-node.flag .dot {
-  background: #f59e0b;
-  border-color: #b45309;
-}
-
-.pipeline-label {
-  font-size: 0.72rem;
+.source-chip {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+  max-width: 9.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  vertical-align: middle;
 }
 
-.pipeline-connector {
-  width: 1.1rem;
-  height: 1px;
+.source-chip-finance {
+  background: #dbeafe;
+  color: #1e40af;
+  border: 1px solid #93c5fd;
+}
+
+.source-chip-risk {
+  background: #fce7f3;
+  color: #9d174d;
+  border: 1px solid #f9a8d4;
+}
+
+.source-chip-rag {
+  background: #d1fae5;
+  color: #065f46;
+  border: 1px solid #6ee7b7;
+}
+
+.source-chip-demo {
+  background: #e0e7ff;
+  color: #3730a3;
+  border: 1px solid #a5b4fc;
+}
+
+.source-chip-internal {
   background: #e2e8f0;
-  margin: 0 0.15rem;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+
+.connected-apps-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0 0.85rem 0;
+}
+
+.connected-apps-label {
+  font-size: 0.82rem;
+  color: #64748b;
+  margin-right: 0.25rem;
+}
+
+.traffic-blurb {
+  flex: 1;
+  min-width: 0;
+  color: #475569;
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .traffic-decision {
   width: 5.5rem;
   min-width: 5.5rem;
   text-align: right;
+  flex-shrink: 0;
 }
+
+.traffic-meta {
+  font-size: 0.78rem;
+  color: #94a3b8;
+  margin: 0.35rem 0 0.55rem 0;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+
+.stage-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.35rem 0 0.75rem 0;
+}
+
+.stage-item {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  gap: 0.5rem;
+  align-items: start;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.stage-item.ran {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+
+.stage-item.flagged {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.stage-item.idle {
+  opacity: 0.65;
+}
+
+.stage-status {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.stage-item.ran .stage-status { color: #065f46; }
+.stage-item.flagged .stage-status { color: #92400e; }
+.stage-item.idle .stage-status { color: #94a3b8; }
+
+.stage-copy strong {
+  display: block;
+  color: #0f172a;
+  font-size: 0.85rem;
+}
+
+.stage-copy span {
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
 </style>
 """
 
@@ -376,13 +493,21 @@ def badge_html(label: str, kind: str) -> str:
     return f'<span class="badge badge-{kind}">{safe}</span>'
 
 
-PIPELINE_STAGES: tuple[tuple[str, str], ...] = (
-    ("retrieval", "Retrieve"),
-    ("injection_flag", "Scan"),
-    ("policy_check", "Gateway"),
-    ("tool_call", "Action"),
-    ("approval", "Approval"),
+PIPELINE_STAGES: tuple[tuple[str, str, str], ...] = (
+    ("retrieval", "Retrieve", "Pulled policy/context from the knowledge base"),
+    ("injection_flag", "Scan", "Checked retrieved text for prompt-injection"),
+    ("policy_check", "Gateway", "Scored the tool call against process policy"),
+    ("tool_call", "Action", "Agent attempted or completed a tool call"),
+    ("approval", "Approval", "Human approve/reject was recorded"),
 )
+
+# Distinct chip color per known source_app; anything else / missing ? internal.
+_SOURCE_APP_CHIP_CLASS: dict[str, str] = {
+    "finance_app": "source-chip-finance",
+    "risk_rating_app": "source-chip-risk",
+    "rag_bot_app": "source-chip-rag",
+    "Aegis Demo Traffic": "source-chip-demo",
+}
 
 
 def _esc(text: str) -> str:
@@ -394,35 +519,84 @@ def _esc(text: str) -> str:
     )
 
 
-def traffic_row_html(case: dict, *, is_new: bool = False) -> str:
-    """One live-traffic pipeline row: case id + stage dots + decision badge."""
-    stages = set(case.get("stages") or [])
-    nodes: list[str] = []
-    for i, (event_type, label) in enumerate(PIPELINE_STAGES):
-        hit = event_type in stages
-        # injection_flag only fires when something was actually flagged —
-        # render it amber (alert), not the default teal "passed" color.
-        cls = "pipeline-node"
-        if hit:
-            cls += " flag" if event_type == "injection_flag" else " hit"
-        nodes.append(
-            f'<div class="{cls}"><span class="dot"></span>'
-            f'<span class="pipeline-label">{label}</span></div>'
-        )
-        if i < len(PIPELINE_STAGES) - 1:
-            nodes.append('<div class="pipeline-connector"></div>')
+def source_app_chip_html(source_app: str | None) -> str:
+    """Colored source_app chip; neutral 'internal' when unlabeled."""
+    if source_app:
+        label = str(source_app)
+        cls = _SOURCE_APP_CHIP_CLASS.get(label, "source-chip-internal")
+    else:
+        label = "internal"
+        cls = "source-chip-internal"
+    return (
+        f'<span class="source-chip {cls}" title="{_esc(label)}">'
+        f"{_esc(label)}</span>"
+    )
 
+
+def connected_apps_html(source_apps: list[str]) -> str:
+    """KPI-style strip of distinct connected source_app chips."""
+    if not source_apps:
+        return (
+            '<div class="connected-apps-row">'
+            '<span class="connected-apps-label">'
+            "No labeled applications in recent traffic yet.</span>"
+            "</div>"
+        )
+    chips = " ".join(source_app_chip_html(name) for name in source_apps)
+    n = len(source_apps)
+    noun = "application" if n == 1 else "applications"
+    return (
+        f'<div class="connected-apps-row">'
+        f'<span class="connected-apps-label">'
+        f"{n} {noun} currently sending traffic:</span>"
+        f"{chips}"
+        f"</div>"
+    )
+
+
+def pipeline_stages_checklist_html(stages: set[str] | list[str] | None) -> str:
+    """Labeled checklist for the event detail dialog (not the list rows)."""
+    hit = set(stages or [])
+    rows: list[str] = []
+    for event_type, label, tip in PIPELINE_STAGES:
+        if event_type in hit and event_type == "injection_flag":
+            state, status = "flagged", "FLAGGED"
+        elif event_type in hit:
+            state, status = "ran", "RAN"
+        else:
+            state, status = "idle", "SKIPPED"
+        rows.append(
+            f'<div class="stage-item {state}">'
+            f'<span class="stage-status">{status}</span>'
+            f'<div class="stage-copy"><strong>{_esc(label)}</strong>'
+            f"<span>{_esc(tip)}</span></div></div>"
+        )
+    return f'<div class="stage-checklist">{"".join(rows)}</div>'
+
+
+def traffic_row_html(case: dict, *, is_new: bool = False) -> str:
+    """One live-traffic row: time, id, source, process, summary, decision."""
     decision = (case.get("decision") or "").lower()
     kind = decision if decision in {"allow", "block", "escalate"} else "neutral"
-    label = (case.get("decision") or case.get("status") or "—").upper()
+    label = (case.get("decision") or case.get("status") or "--").upper()
+    source_chip = source_app_chip_html(case.get("source_app"))
+    clock = short_timestamp(case.get("created_at")) or "--:--:--"
+    age = relative_age(case.get("created_at"))
+    time_bits = _esc(clock)
+    if age:
+        time_bits = f'{time_bits} <span class="traffic-age">{_esc(age)}</span>'
+    full_ts = _esc(str(case.get("created_at") or ""))
+    blurb = traffic_event_blurb(case)
 
     row_cls = "traffic-row is-new" if is_new else "traffic-row"
     return (
         f'<div class="{row_cls}">'
+        f'<span class="traffic-time" title="{full_ts}">{time_bits}</span>'
         f'<span class="traffic-id" title="{_esc(case.get("case_id") or "")}">'
-        f'{_esc(case.get("case_id") or "—")}</span>'
-        f'<span class="traffic-process">{_esc(case.get("process") or "—")}</span>'
-        f'<div class="pipeline">{"".join(nodes)}</div>'
+        f'{_esc(case.get("case_id") or "--")}</span>'
+        f'<span class="traffic-source">{source_chip}</span>'
+        f'<span class="traffic-process">{_esc(case.get("process") or "--")}</span>'
+        f'<span class="traffic-blurb" title="{_esc(blurb)}">{_esc(blurb)}</span>'
         f'<span class="traffic-decision">{badge_html(label, kind)}</span>'
         f"</div>"
     )
@@ -433,4 +607,4 @@ def decision_banner_html(decision: str | None) -> str:
     if kind not in {"allow", "block", "escalate"}:
         kind = "unknown"
     text = (decision or "no decision").upper()
-    return f'<div class="decision-banner {kind}">DECISION · {text}</div>'
+    return f'<div class="decision-banner {kind}">DECISION | {text}</div>'
