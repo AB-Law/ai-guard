@@ -1,0 +1,17 @@
+process: procurement_review
+allowed_tools:
+  - name: create_purchase_order
+    max_auto_amount: 10000
+  - name: request_approval
+    max_auto_amount: null
+disallowed_tools:
+  - send_payment
+  - modify_vendor_banking_details
+required_evidence_docs:
+  - procurement_policy
+  - vendor_master_list
+approval_threshold:
+  risk_score_gte: 60
+knowledge_base_paths:
+  - ./data/procurement_policy.md
+  - ./data/vendor_master.csv

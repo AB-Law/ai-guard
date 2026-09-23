@@ -1,0 +1,28 @@
+{
+  "id": "high_amount_escalate",
+  "process": "procurement_review",
+  "request": {
+    "vendor_id": "V-1001",
+    "amount": 50000,
+    "item": "Server racks"
+  },
+  "mock_agent_plan": {
+    "tool_name": "create_purchase_order",
+    "tool_args": {
+      "vendor_id": "V-1001",
+      "amount": 50000,
+      "item": "Server racks"
+    },
+    "agent_rationale": "Purchase orders at or below USD 10,000 may be auto-approved when the vendor is active on the vendor master list. This larger amount needs human approval.",
+    "context_refs": ["chunk:policy:auto_approve", "chunk:policy:escalation", "chunk:vendor:V-1001"]
+  },
+  "resume": {
+    "action": "approve",
+    "actor": "procurement-lead"
+  },
+  "expected": {
+    "gateway_decision": "escalate",
+    "final_status": "completed",
+    "audit_event_types": ["retrieval", "policy_check", "tool_call", "approval"]
+  }
+}

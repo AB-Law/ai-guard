@@ -1,0 +1,1 @@
+"""Investigation assistant package."""

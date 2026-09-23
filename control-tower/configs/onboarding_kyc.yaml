@@ -1,0 +1,15 @@
+# Phase 4 — second process for config-swap demo
+process: onboarding_kyc
+allowed_tools:
+  - name: verify_identity
+    max_auto_amount: null
+  - name: request_approval
+    max_auto_amount: null
+disallowed_tools:
+  - disburse_funds
+required_evidence_docs:
+  - kyc_policy
+approval_threshold:
+  risk_score_gte: 60
+knowledge_base_paths:
+  - ./data/kyc_policy.md

@@ -1,0 +1,8 @@
+bands:
+  - max_amount: 2500
+    risk_hint: low
+  - max_amount: 10000
+    risk_hint: medium
+  - max_amount: null
+    risk_hint: high
+    requires_human: true
