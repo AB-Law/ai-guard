@@ -235,7 +235,12 @@ def _explain_decision(case: dict) -> str:
     return "\n\n".join(bits)
 
 
-@st.dialog("Event detail", width="large")
+def _clear_selected_event() -> None:
+    """Drop the Live-traffic event selection (Close button or native ×)."""
+    st.session_state.pop("selected_event_id", None)
+
+
+@st.dialog("Event detail", width="large", on_dismiss=_clear_selected_event)
 def _traffic_event_dialog(client: AegisApiClient, case_id: str) -> None:
     """Datadog-style popup: what happened, why, request + tool + timeline."""
     try:
@@ -314,7 +319,8 @@ def _traffic_event_dialog(client: AegisApiClient, case_id: str) -> None:
                 )
 
     if st.button("Close", use_container_width=True):
-        st.rerun()
+        _clear_selected_event()
+        st.rerun(scope="app")
 
 
 def main() -> None:
@@ -761,7 +767,15 @@ def main() -> None:
                     key=f"traffic-view-{cid}",
                     use_container_width=True,
                 ):
-                    _traffic_event_dialog(client, cid)
+                    # Open from main() — calling the dialog inside this fragment
+                    # makes Close's st.rerun() fragment-scoped and leaves the overlay stuck.
+                    st.session_state["selected_event_id"] = cid
+                    st.rerun(scope="app")
+
+    # Dialog must live outside the auto-refresh fragment so Close can full-app-rerun.
+    selected_event_id = st.session_state.get("selected_event_id")
+    if selected_event_id:
+        _traffic_event_dialog(client, str(selected_event_id))
 
     _live_traffic()
 
