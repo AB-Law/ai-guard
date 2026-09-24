@@ -192,6 +192,27 @@ class PostgresCaseStore:
         )
 
 
+def build_kv_store(
+    database_url: str | None,
+    *,
+    table: str,
+    key_col: str,
+    sqlite_path: Path,
+    memory_factory: Callable[[], Any],
+) -> MutableMapping[str, Any]:
+    """Generic persisted key -> JSON-blob map, same DATABASE_URL semantics as
+    build_case_store: unset -> in-memory, "sqlite" -> SQLite file, postgres(ql)://
+    -> Postgres. Used for stores (e.g. applications) that don't need
+    build_case_store's specific .cases/.call_to_case shape.
+    """
+    if is_postgres_url(database_url):
+        return _PostgresJSONMap(database_url, table, key_col)  # type: ignore[arg-type]
+    if database_url == "sqlite":
+        sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+        return _SqliteJSONMap(sqlite_path, table, key_col)
+    return memory_factory()
+
+
 def build_case_store(
     database_url: str | None,
     *,

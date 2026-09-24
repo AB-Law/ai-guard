@@ -1,0 +1,40 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Manrope', ui-sans-serif, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  --color-bg: #0a0d12;
+  --color-surface: #12161d;
+  --color-surface-2: #171c24;
+  --color-surface-hover: #1d2430;
+  --color-border: #232a35;
+  --color-border-subtle: #1a2029;
+
+  --color-text-primary: #e8ebef;
+  --color-text-secondary: #92a0b3;
+  --color-text-muted: #5c6879;
+
+  --color-accent: #5ea8ff;
+  --color-accent-soft: #5ea8ff1f;
+  --color-accent-border: #5ea8ff59;
+
+  --color-success: #3ecf8e;
+  --color-success-soft: #3ecf8e1f;
+  --color-warning: #f5a623;
+  --color-warning-soft: #f5a6231f;
+  --color-danger: #f0554a;
+  --color-danger-soft: #f0554a1f;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+}
+
+* {
+  box-sizing: border-box;
+}

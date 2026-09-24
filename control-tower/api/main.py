@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -15,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from agent.graph import build_graph, initial_state, resume_case, run_case
 from agent.tools import ToolSideEffects
-from api.case_store_db import build_case_store
+from api.case_store_db import build_case_store, build_kv_store
 from api.checkpointer import build_checkpointer
 from audit.backend import build_audit_store
 from configs.loader import KNOWN_PROCESSES, load_process
@@ -38,6 +41,24 @@ load_dotenv(_PROJECT_ROOT / ".env")
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _slugify(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+    return slug or "app"
+
+
+def _generate_api_key(environment: str) -> str:
+    tag = "live" if environment == "production" else "test"
+    return f"sk_{tag}_{secrets.token_hex(16)}"
+
+
+def _hash_key(key: str) -> str:
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+def _mask_key(key_prefix: str, key_last4: str) -> str:
+    return f"{key_prefix}{'•' * 8}{key_last4}"
 
 
 def _parse_created_at(value: Any) -> datetime | None:
@@ -84,6 +105,24 @@ class SubmitCaseBody(BaseModel):
 class ApprovalBody(BaseModel):
     action: Literal["approve", "reject"]
     actor: str = Field(min_length=1)
+
+
+class DemoTamperBody(BaseModel):
+    enable: bool = True
+
+
+class CreateApplicationBody(BaseModel):
+    """Registers an agent identity with the tower — ARCHITECTURE §4.2's
+    "no ambient tool access; every call allow-listed per process" starts with
+    knowing which agent is calling. source_app defaults to a slug of name and
+    is the value that agent should send as `source_app` on /cases and
+    /guard/evaluate — that's how request stats below are attributed.
+    """
+
+    name: str = Field(min_length=1)
+    environment: Literal["production", "staging"] = "production"
+    process: str
+    source_app: str | None = None
 
 
 class InvestigateBody(BaseModel):
@@ -147,6 +186,13 @@ def create_app(
     store = build_case_store(
         db_url, sqlite_path=root / "data" / "cases.db", memory_factory=CaseStore
     )
+    applications = build_kv_store(
+        db_url,
+        table="applications",
+        key_col="app_id",
+        sqlite_path=root / "data" / "applications.db",
+        memory_factory=dict,
+    )
     checkpointer, close_checkpointer = build_checkpointer(
         db_url, sqlite_path=root / "data" / "checkpoints.db"
     )
@@ -163,6 +209,8 @@ def create_app(
     app.state.audit = audit
     app.state.kbs = kbs
     app.state.store = store
+    app.state.applications = applications
+    app.state.demo_tamper = None
     app.state.side_effects = ToolSideEffects()
     app.state.checkpointer = checkpointer
     app.state._close_checkpointer = close_checkpointer
@@ -213,6 +261,69 @@ def create_app(
             store.call_to_case[call_id] = case_id
         return record
 
+    def _app_stats(source_app: str) -> dict[str, Any]:
+        today = datetime.now(UTC).date()
+        requests_today = 0
+        last_seen: str | None = None
+        for rec in store.cases.values():
+            if rec.get("source_app") != source_app:
+                continue
+            created_raw = rec.get("created_at")
+            created = _parse_created_at(created_raw)
+            if created is not None and created.date() == today:
+                requests_today += 1
+            if created_raw and (last_seen is None or str(created_raw) > last_seen):
+                last_seen = str(created_raw)
+        return {"requests_today": requests_today, "last_seen": last_seen}
+
+    def _application_view(record: dict[str, Any]) -> dict[str, Any]:
+        stats = _app_stats(record["source_app"])
+        return {
+            "app_id": record["app_id"],
+            "name": record["name"],
+            "environment": record["environment"],
+            "process": record["process"],
+            "source_app": record["source_app"],
+            "status": record["status"],
+            "key_display": _mask_key(record["key_prefix"], record["key_last4"]),
+            "created_at": record["created_at"],
+            "revoked_at": record.get("revoked_at"),
+            **stats,
+        }
+
+    def _seed_default_applications() -> None:
+        """First boot only (store empty) — registers the agents the existing
+        traffic simulators already impersonate (scripts/simulated_apps/*.py),
+        so Applications shows real request stats the moment that traffic runs
+        instead of starting from an empty state every demo rehearsal.
+        """
+        if len(app.state.applications) > 0:
+            return
+        defaults = [
+            ("Procurement Agent", "production", "procurement_review", "legacy_cases"),
+            ("Finance Agent", "production", "finance", "finance_app"),
+            ("Risk Rating Agent", "production", "risk_rating", "risk_rating_app"),
+            ("RAG Support Bot", "staging", "rag_bot", "rag_bot_app"),
+        ]
+        for name, environment, process, source_app in defaults:
+            app_id = f"app_{uuid.uuid4().hex[:12]}"
+            api_key = _generate_api_key(environment)
+            app.state.applications[app_id] = {
+                "app_id": app_id,
+                "name": name,
+                "environment": environment,
+                "process": process,
+                "source_app": source_app,
+                "status": "connected",
+                "key_hash": _hash_key(api_key),
+                "key_prefix": api_key[:12],
+                "key_last4": api_key[-4:],
+                "created_at": _utc_now(),
+                "revoked_at": None,
+            }
+
+    _seed_default_applications()
+
     def _rebuild_runtime() -> None:
         """Fresh checkpointer + side effects after demo reset (HITL threads cleared).
 
@@ -236,6 +347,7 @@ def create_app(
         app.state.audit.clear()
         store.cases.clear()
         store.call_to_case.clear()
+        app.state.demo_tamper = None
         _rebuild_runtime()
 
     @app.post("/cases")
@@ -391,9 +503,11 @@ def create_app(
     @app.get("/audit/verify")
     def verify_audit() -> dict[str, Any]:
         entries = app.state.audit.query()
+        valid, first_invalid_entry_id = app.state.audit.verify_chain_detailed()
         return {
-            "valid": app.state.audit.verify_chain(),
+            "valid": valid,
             "entry_count": len(entries),
+            "first_invalid_entry_id": first_invalid_entry_id,
         }
 
     @app.post("/investigate")
@@ -503,6 +617,40 @@ def create_app(
         store.call_to_case[call_id] = case_id
         return decision.model_dump()
 
+    @app.get("/approvals")
+    def list_approvals() -> dict[str, Any]:
+        """Pending-approval queue as its own resource — the integration point
+        for a customer's own system to poll (or later, webhook off of) rather
+        than fetching every case and filtering client-side. Approve/reject
+        stays POST /approvals/{call_id}, unchanged; this is its GET half.
+        """
+        rows = sorted(
+            (r for r in store.cases.values() if r.get("status") == "pending_approval"),
+            key=lambda r: str(r.get("created_at") or ""),
+            reverse=True,
+        )
+        out = []
+        for r in rows:
+            gw = r.get("gateway_decision") or {}
+            tool_result = r.get("tool_result") or {}
+            request_payload = r.get("request") or {}
+            out.append(
+                {
+                    "call_id": r.get("call_id"),
+                    "case_id": r.get("case_id"),
+                    "process": r.get("process"),
+                    "tool_name": tool_result.get("tool_name") or request_payload.get("tool_name"),
+                    "reason": gw.get("reason"),
+                    "risk_score": gw.get("risk_score"),
+                    "confidence_score": gw.get("confidence_score"),
+                    "evidence_score": gw.get("evidence_score"),
+                    "policy_refs": gw.get("policy_refs") or [],
+                    "source_app": r.get("source_app"),
+                    "requested_at": r.get("created_at"),
+                }
+            )
+        return {"approvals": out, "count": len(out)}
+
     @app.post("/approvals/{call_id}")
     def approve(call_id: str, body: ApprovalBody) -> dict[str, Any]:
         case_id = store.call_to_case.get(call_id)
@@ -604,6 +752,131 @@ def create_app(
             "kb_size": process_kb.size,
             "process": process,
         }
+
+    @app.get("/configs")
+    def list_configs() -> dict[str, Any]:
+        """Real process configs, parsed from configs/*.yaml — the same file
+        the gateway enforces against, not a client-side copy of it. Doc lists
+        include both the seed KB paths and anything uploaded live via
+        /knowledge/documents, read straight off disk.
+        """
+        title_overrides = {"onboarding_kyc": "Onboarding KYC", "rag_bot": "RAG Bot"}
+        out: list[dict[str, Any]] = []
+        for name in KNOWN_PROCESSES:
+            try:
+                cfg = load_process(name, configs_dir=root / "configs")
+            except (FileNotFoundError, ValueError):
+                continue
+            updir = uploads_dir(root, name)
+            uploaded = sorted(p.name for p in updir.glob("*")) if updir.is_dir() else []
+            out.append(
+                {
+                    "id": name,
+                    "title": title_overrides.get(name, name.replace("_", " ").title()),
+                    "config_path": f"configs/{name}.yaml",
+                    "allowed_tools": [t.model_dump() for t in cfg.allowed_tools],
+                    "disallowed_tools": cfg.disallowed_tools,
+                    "approval_threshold": cfg.approval_threshold.model_dump(),
+                    "seed_docs": [Path(p).name for p in cfg.knowledge_base_paths],
+                    "uploaded_docs": uploaded,
+                }
+            )
+        return {"processes": out}
+
+    @app.post("/applications")
+    def create_application(body: CreateApplicationBody) -> dict[str, Any]:
+        if body.process not in KNOWN_PROCESSES:
+            raise HTTPException(status_code=400, detail=f"unknown process {body.process!r}")
+        app_id = f"app_{uuid.uuid4().hex[:12]}"
+        source_app = body.source_app or _slugify(body.name)
+        api_key = _generate_api_key(body.environment)
+        record = {
+            "app_id": app_id,
+            "name": body.name,
+            "environment": body.environment,
+            "process": body.process,
+            "source_app": source_app,
+            "status": "connected",
+            "key_hash": _hash_key(api_key),
+            "key_prefix": api_key[:12],
+            "key_last4": api_key[-4:],
+            "created_at": _utc_now(),
+            "revoked_at": None,
+        }
+        app.state.applications[app_id] = record
+        view = _application_view(record)
+        # The only response that ever carries the plaintext key — only the
+        # hash is stored, so this is the caller's one chance to see it.
+        view["api_key"] = api_key
+        return view
+
+    @app.get("/applications")
+    def list_applications() -> dict[str, Any]:
+        records = sorted(
+            app.state.applications.values(),
+            key=lambda r: str(r.get("created_at") or ""),
+            reverse=True,
+        )
+        return {"applications": [_application_view(r) for r in records]}
+
+    @app.post("/applications/{app_id}/revoke")
+    def revoke_application(app_id: str) -> dict[str, Any]:
+        record = app.state.applications.get(app_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="application not found")
+        record = dict(record)
+        record["status"] = "revoked"
+        record["revoked_at"] = _utc_now()
+        app.state.applications[app_id] = record
+        return _application_view(record)
+
+    @app.get("/audit/entries")
+    def list_audit_entries(
+        limit: int = 100,
+        offset: int = 0,
+        process: str | None = None,
+        event_type: str | None = None,
+        decision: str | None = None,
+    ) -> dict[str, Any]:
+        """Global, paginated audit log — every retrieval/decision/tool call/score
+        across all processes and cases, most recent first. Powers Logs and
+        Audit & Integrity without the per-case N+1 fetch /cases/{id}/audit needs.
+        """
+        if limit < 1:
+            raise HTTPException(status_code=422, detail="limit must be >= 1")
+        entries = app.state.audit.query(process=process, event_type=event_type, order="desc")
+        if decision:
+            entries = [e for e in entries if e.scores is not None and e.scores.decision == decision]
+        total = len(entries)
+        page = entries[offset : offset + limit]
+        return {
+            "entries": [e.model_dump() for e in page],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    @app.post("/audit/demo-tamper")
+    def demo_tamper(body: DemoTamperBody) -> dict[str, Any]:
+        """Debug/demo only — genuinely corrupts one stored hash (not a UI
+        simulation) so /audit/verify authentically fails, then restores it.
+        ARCHITECTURE.md §12's tamper-check demo, done for real.
+        """
+        state = app.state.demo_tamper
+        if body.enable:
+            if state is not None:
+                return {"tampered": True, "entry_id": state["entry_id"]}
+            try:
+                result = app.state.audit.demo_corrupt_entry()
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            app.state.demo_tamper = result
+            return {"tampered": True, "entry_id": result["entry_id"]}
+        if state is None:
+            return {"tampered": False, "entry_id": None}
+        app.state.audit.demo_restore_entry(state["entry_id"], state["original_hash"])
+        app.state.demo_tamper = None
+        return {"tampered": False, "entry_id": None}
 
     @app.get("/health")
     def health() -> dict[str, str]:
