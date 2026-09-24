@@ -91,6 +91,42 @@ def test_verify_evidence_forwards_request_facts_to_llm_judge(
     mock_judge.assert_called_once_with("some rationale", ["some chunk"], request_facts=facts)
 
 
+def test_verify_evidence_fail_closed_when_judge_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    with (
+        patch(
+            "guardrails.output_verifier._llm_judge",
+            side_effect=TimeoutError("judge timed out"),
+        ),
+        patch("guardrails.output_verifier.verify") as mock_verify,
+    ):
+        result = verify_evidence("some rationale", ["some chunk"])
+    mock_verify.assert_not_called()
+    assert result.evidence_score == 0.0
+    assert result.judge_unavailable is True
+    assert result.unsupported_claims == []
+
+
+def test_verify_evidence_fail_closed_when_judge_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty structured output raises inside _llm_judge; verify_evidence fails closed."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    with (
+        patch("langchain_openai.ChatOpenAI") as mock_chat_cls,
+        patch("guardrails.output_verifier.verify") as mock_verify,
+    ):
+        mock_chat_cls.return_value.with_structured_output.return_value.invoke.return_value = (
+            None
+        )
+        result = verify_evidence("some rationale", ["some chunk"])
+    mock_verify.assert_not_called()
+    assert result.evidence_score == 0.0
+    assert result.judge_unavailable is True
+
+
 def test_llm_judge_empty_rationale_short_circuits_without_a_call() -> None:
     """No claims to check -> trivially supported, no LLM call needed.
     langchain_openai is imported lazily inside _llm_judge only past this

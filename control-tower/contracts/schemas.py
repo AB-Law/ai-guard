@@ -77,6 +77,7 @@ class InjectionClassifierResult(BaseModel):
 class VerificationResult(BaseModel):
     evidence_score: float = Field(ge=0.0, le=1.0)
     unsupported_claims: list[str]
+    judge_unavailable: bool = False
 
 
 PolicyEntailmentSeverity = Literal["none", "soft", "hard"]
