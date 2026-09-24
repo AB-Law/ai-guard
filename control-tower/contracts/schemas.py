@@ -65,6 +65,15 @@ class InjectionScanResult(BaseModel):
     trust: Literal["untrusted", "none"] = "none"
 
 
+class InjectionClassifierResult(BaseModel):
+    """Structured output from the semantic injection classifier."""
+
+    is_injection: bool
+    severity: InjectionSeverity = "medium"
+    attack_type: str = "none"
+    rationale: str = ""
+
+
 class VerificationResult(BaseModel):
     evidence_score: float = Field(ge=0.0, le=1.0)
     unsupported_claims: list[str]

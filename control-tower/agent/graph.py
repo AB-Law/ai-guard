@@ -20,7 +20,7 @@ from agent.state import AgentState
 from agent.tools import ToolSideEffects, execute_bound_tool
 from audit.log_store import AppendInput, AuditLogStore
 from configs.loader import ProcessConfig, load_process
-from contracts.schemas import GatewayDecision, ToolCallRequest
+from contracts.schemas import GatewayDecision, InjectionFlag, ToolCallRequest
 from guardrails import evaluate_tool_call
 from guardrails.injection_guard import scan
 from knowledge.rag import KnowledgeBase, build_kb_for_process
@@ -135,12 +135,9 @@ def build_graph(
         return {"chunks": chunk_dicts, "status": "running"}
 
     def scan_injection(state: AgentState) -> dict[str, Any]:
-        flags: list[dict[str, Any]] = []
-        for chunk in state.get("chunks") or []:
-            result = scan(chunk.get("text"))
-            for flag in result.flags:
-                flags.append(flag.model_dump())
-        return {"injection_flags": flags}
+        texts = [c.get("text") for c in (state.get("chunks") or [])]
+        result = scan(texts)
+        return {"injection_flags": [flag.model_dump() for flag in result.flags]}
 
     def reason(state: AgentState) -> dict[str, Any]:
         # Placeholder node for symmetry with BUILD; propose_tool does the work.
@@ -182,11 +179,15 @@ def build_graph(
             timestamp=_utc_now(),
         )
         texts = [c["text"] for c in (state.get("chunks") or [])]
+        precomputed = [
+            InjectionFlag.model_validate(f) for f in (state.get("injection_flags") or [])
+        ]
         decision = evaluate_tool_call(
             request,
             process_config,
             retrieved_texts=texts,
             context_chunks=texts,
+            injection_flags=precomputed,
             audit=audit,
         )
         return {"gateway_decision": _decision_to_dict(decision)}
