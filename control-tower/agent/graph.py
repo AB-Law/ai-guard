@@ -178,7 +178,8 @@ def build_graph(
             context_refs=list(state.get("context_refs") or []),
             timestamp=_utc_now(),
         )
-        texts = [c["text"] for c in (state.get("chunks") or [])]
+        chunk_dicts = list(state.get("chunks") or [])
+        texts = [c["text"] for c in chunk_dicts]
         precomputed = [
             InjectionFlag.model_validate(f) for f in (state.get("injection_flags") or [])
         ]
@@ -188,6 +189,7 @@ def build_graph(
             retrieved_texts=texts,
             context_chunks=texts,
             injection_flags=precomputed,
+            retrieved_chunk_ids=[c["id"] for c in chunk_dicts],
             audit=audit,
         )
         return {"gateway_decision": _decision_to_dict(decision)}

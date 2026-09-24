@@ -32,3 +32,30 @@ def test_injection_raises_risk_above_threshold() -> None:
 def test_low_evidence_alone_can_reach_threshold() -> None:
     risk, _, _ = score(injection_flags=[], evidence_score=0.0, policy_hit="none")
     assert risk >= 60
+
+
+def test_soft_entailment_raises_risk() -> None:
+    risk_clean, _, _ = score(
+        injection_flags=[],
+        evidence_score=0.9,
+        policy_hit="none",
+        entailment_severity="none",
+    )
+    risk_soft, _, _ = score(
+        injection_flags=[],
+        evidence_score=0.9,
+        policy_hit="none",
+        entailment_severity="soft",
+    )
+    assert risk_soft == risk_clean + 30
+    assert risk_soft < 60
+
+
+def test_hard_entailment_raises_risk() -> None:
+    risk, _, _ = score(
+        injection_flags=[],
+        evidence_score=0.9,
+        policy_hit="none",
+        entailment_severity="hard",
+    )
+    assert risk >= 50

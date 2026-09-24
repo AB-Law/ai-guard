@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from configs.loader import load_process
-from contracts.schemas import ToolCallRequest
+from contracts.schemas import PolicyEntailmentResult, ToolCallRequest
 from guardrails.gateway import decide
 
 
@@ -183,3 +183,38 @@ def test_rag_bot_gateway_table(tool, risk, expected) -> None:
         confidence_score=0.9,
     )
     assert decision.decision == expected
+
+
+def test_hard_entailment_forces_escalate(procurement_config) -> None:
+    entailment = PolicyEntailmentResult(
+        compliant=False,
+        violated_clauses=["vendor must be active"],
+        severity="hard",
+    )
+    decision = decide(
+        _request("create_purchase_order", 2500.0),
+        procurement_config,
+        risk_score=10,
+        evidence_score=0.9,
+        confidence_score=0.9,
+        entailment=entailment,
+    )
+    assert decision.decision == "escalate"
+    assert "vendor must be active" in decision.policy_refs
+
+
+def test_soft_entailment_does_not_force_escalate(procurement_config) -> None:
+    entailment = PolicyEntailmentResult(
+        compliant=False,
+        violated_clauses=["duplicate-PO check incomplete"],
+        severity="soft",
+    )
+    decision = decide(
+        _request("create_purchase_order", 2500.0),
+        procurement_config,
+        risk_score=10,
+        evidence_score=0.9,
+        confidence_score=0.9,
+        entailment=entailment,
+    )
+    assert decision.decision == "allow"

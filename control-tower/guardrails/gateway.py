@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from configs.loader import AllowedTool, ProcessConfig
-from contracts.schemas import GatewayDecision, ToolCallRequest
+from contracts.schemas import GatewayDecision, PolicyEntailmentResult, ToolCallRequest
 from guardrails.risk_scorer import PolicyHit
 
 
@@ -46,6 +46,7 @@ def decide(
     risk_score: int,
     evidence_score: float,
     confidence_score: float,
+    entailment: PolicyEntailmentResult | None = None,
 ) -> GatewayDecision:
     """
     Evaluate a tool call against process config and precomputed scores.
@@ -54,8 +55,9 @@ def decide(
       1. Tool in disallowed_tools -> block
       2. Tool not in allowed_tools -> block
       3. amount > max_auto_amount (when applicable) -> escalate
-      4. risk_score >= approval_threshold.risk_score_gte -> escalate
-      5. Else -> allow
+      4. Hard policy-entailment / missing evidence -> escalate
+      5. risk_score >= approval_threshold.risk_score_gte -> escalate
+      6. Else -> allow
     """
     allowed = _allowed_tool_map(config)
     threshold = config.approval_threshold.risk_score_gte
@@ -98,6 +100,20 @@ def decide(
                 f"{tool.max_auto_amount} for {request.tool_name!r}."
             ),
             policy_refs=[ref, request.tool_name],
+            risk_score=risk_score,
+            confidence_score=confidence_score,
+            evidence_score=evidence_score,
+        )
+
+    if entailment is not None and entailment.severity == "hard":
+        clauses = entailment.violated_clauses or ["policy_entailment:hard"]
+        return GatewayDecision(
+            call_id=request.call_id,
+            decision="escalate",
+            reason=(
+                "Hard policy entailment violation: " + "; ".join(clauses)
+            ),
+            policy_refs=list(clauses),
             risk_score=risk_score,
             confidence_score=confidence_score,
             evidence_score=evidence_score,

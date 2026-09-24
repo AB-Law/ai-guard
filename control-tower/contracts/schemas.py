@@ -77,3 +77,14 @@ class InjectionClassifierResult(BaseModel):
 class VerificationResult(BaseModel):
     evidence_score: float = Field(ge=0.0, le=1.0)
     unsupported_claims: list[str]
+
+
+PolicyEntailmentSeverity = Literal["none", "soft", "hard"]
+
+
+class PolicyEntailmentResult(BaseModel):
+    """Structured output from the policy-entailment judge."""
+
+    compliant: bool
+    violated_clauses: list[str] = []
+    severity: PolicyEntailmentSeverity = "none"
