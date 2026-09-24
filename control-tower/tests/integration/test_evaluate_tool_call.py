@@ -247,3 +247,55 @@ def test_precomputed_injection_flags_skip_rescan(store: AuditLogStore) -> None:
     assert len(injection_rows) == 1
     assert injection_rows[0].payload["flags"][0]["pattern_id"] == "llm:role_play"
     assert decision.risk_score >= 80
+
+
+def test_judge_unavailable_escalates_allowed_tool(
+    store: AuditLogStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    config = load_process("procurement_review")
+    compliant = PolicyEntailmentResult(compliant=True, violated_clauses=[], severity="none")
+    with (
+        patch(
+            "guardrails.output_verifier._llm_judge",
+            side_effect=TimeoutError("judge timed out"),
+        ),
+        patch("guardrails.policy_entailment._llm_entail", return_value=compliant),
+        patch("guardrails.output_verifier.verify") as mock_verify,
+    ):
+        decision = evaluate_tool_call(
+            _sample_request(),
+            config,
+            retrieved_texts=["policy and vendor active"],
+            context_chunks=["policy and vendor active"],
+            retrieved_chunk_ids=list(_PROCUREMENT_CHUNK_IDS),
+            injection_flags=[],
+            audit=store,
+        )
+    mock_verify.assert_not_called()
+    assert decision.decision == "escalate"
+    assert decision.evidence_score == 0.0
+    assert "judge_unavailable" in decision.policy_refs
+    assert "unavailable" in decision.reason.lower()
+
+
+def test_judge_unavailable_still_blocks_disallowed_tool(
+    store: AuditLogStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    config = load_process("procurement_review")
+    compliant = PolicyEntailmentResult(compliant=True, violated_clauses=[], severity="none")
+    with (
+        patch(
+            "guardrails.output_verifier._llm_judge",
+            side_effect=RuntimeError("api error"),
+        ),
+        patch("guardrails.policy_entailment._llm_entail", return_value=compliant),
+    ):
+        decision = evaluate_tool_call(
+            _sample_request(tool_name="send_payment"),
+            config,
+            audit=store,
+        )
+    assert decision.decision == "block"
+    assert "judge_unavailable" not in decision.policy_refs

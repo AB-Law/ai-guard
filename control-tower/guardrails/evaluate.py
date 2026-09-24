@@ -96,6 +96,19 @@ def evaluate_tool_call(
         entailment=entailment,
     )
 
+    # Keyed judge failure: fail closed with an auditable reason. Hard blocks
+    # (disallowed / not-allowed tools) still win over escalate.
+    if verification.judge_unavailable and decision.decision != "block":
+        decision = GatewayDecision(
+            call_id=request.call_id,
+            decision="escalate",
+            reason="Evidence judge unavailable; failing closed.",
+            policy_refs=["judge_unavailable"],
+            risk_score=risk_score,
+            confidence_score=confidence_score,
+            evidence_score=0.0,
+        )
+
     audit.append(
         AppendInput(
             process=request.process,

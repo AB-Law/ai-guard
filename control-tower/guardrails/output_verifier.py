@@ -176,7 +176,11 @@ def _llm_judge(
     from langchain_openai import ChatOpenAI
 
     model_name = os.environ.get("OPENAI_MODEL", "gpt-4o")
-    llm = ChatOpenAI(model=model_name, api_key=os.environ["OPENAI_API_KEY"])
+    llm = ChatOpenAI(
+        model=model_name,
+        api_key=os.environ["OPENAI_API_KEY"],
+        timeout=30,
+    )
     structured = llm.with_structured_output(VerificationResult, method="function_calling")
 
     context_block = "\n\n".join(f"[{i}] {c}" for i, c in enumerate(context_chunks)) or "(none)"
@@ -243,6 +247,8 @@ def _llm_judge(
         "Return evidence_score in [0, 1] and unsupported_claims."
     )
     raw = structured.invoke(prompt)
+    if raw is None:
+        raise ValueError("evidence judge returned empty structured output")
     return VerificationResult.model_validate(raw)
 
 
@@ -256,14 +262,25 @@ def verify_evidence(
 
     An LLM judge when OPENAI_API_KEY is configured — that's the real,
     semantic check, and the one that matters for any live case or SDK-
-    integrated agent. verify() (the heuristic above) is a fallback for the
-    paths that need to stay deterministic and free regardless of accuracy:
-    the offline test suite, the synthetic traffic simulator, and a demo run
+    integrated agent. On timeout, API error, parse failure, or empty
+    structured output the keyed path fails closed (evidence_score=0,
+    judge_unavailable=True) and never falls through to the heuristic.
+
+    verify() (the heuristic above) is only for offline/demo paths that
+    need to stay deterministic and free regardless of accuracy: the
+    offline test suite, the synthetic traffic simulator, and a demo run
     with no key configured — not a "fast first pass" the LLM only gets
     consulted when it looks unsure, since the heuristic can be confidently
     wrong (see guardrails/output_verifier tests) and isn't a reliable judge
     of its own uncertainty.
     """
     if os.environ.get("OPENAI_API_KEY", "").strip():
-        return _llm_judge(rationale, context_chunks, request_facts=request_facts)
+        try:
+            return _llm_judge(rationale, context_chunks, request_facts=request_facts)
+        except Exception:  # noqa: BLE001 — fail closed on any judge failure
+            return VerificationResult(
+                evidence_score=0.0,
+                unsupported_claims=[],
+                judge_unavailable=True,
+            )
     return verify(rationale, context_chunks, request_facts=request_facts)
