@@ -2,6 +2,7 @@ process: risk_rating
 allowed_tools:
   - name: assign_risk_rating
     max_auto_amount: 3
+    unit: rating
   - name: request_manual_review
     max_auto_amount: null
 disallowed_tools:

@@ -135,6 +135,12 @@ class KnowledgeBase:
     def get_by_id(self, chunk_id: str) -> RetrievedChunk | None:
         return self._docs.get(chunk_id)
 
+    def all_chunks(self) -> list[RetrievedChunk]:
+        """Every indexed chunk, in insertion order — lets a caller pull the
+        full, small, bounded policy text deterministically instead of
+        trusting semantic retrieval to surface every governing section."""
+        return list(self._docs.values())
+
     def _load_file(self, path: Path) -> list[tuple[str, str, str]]:
         name = path.name.lower()
         source = str(path.relative_to(_PROJECT_ROOT)) if _PROJECT_ROOT in path.parents else path.name

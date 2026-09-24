@@ -117,27 +117,71 @@ class PostgresAuditLogStore:
         )
 
     def verify_chain(self) -> bool:
+        valid, _ = self.verify_chain_detailed()
+        return valid
+
+    def verify_chain_detailed(self) -> tuple[bool, str | None]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT payload_json, timestamp, prev_hash, entry_hash "
+                "SELECT entry_id, payload_json, timestamp, prev_hash, entry_hash "
                 "FROM audit_log ORDER BY rowid ASC"
             ).fetchall()
         expected_prev = GENESIS_PREV_HASH
         for row in rows:
             if row["prev_hash"] != expected_prev:
-                return False
+                return False, row["entry_id"]
             payload = json.loads(row["payload_json"])
             recomputed = compute_entry_hash(row["prev_hash"], payload, row["timestamp"])
             if recomputed != row["entry_hash"]:
-                return False
+                return False, row["entry_id"]
             expected_prev = row["entry_hash"]
-        return True
+        return True, None
+
+    def demo_corrupt_entry(self, entry_id: str | None = None) -> dict[str, str]:
+        """Debug/demo only — see AuditLogStore.demo_corrupt_entry()."""
+        with self._connect() as conn:
+            if entry_id is None:
+                row = conn.execute(
+                    "SELECT entry_id, entry_hash FROM audit_log ORDER BY rowid DESC LIMIT 1 OFFSET 2"
+                ).fetchone()
+                if row is None:
+                    row = conn.execute(
+                        "SELECT entry_id, entry_hash FROM audit_log ORDER BY rowid DESC LIMIT 1"
+                    ).fetchone()
+                if row is None:
+                    raise ValueError("no audit entries to tamper with")
+                entry_id = row["entry_id"]
+                original_hash = row["entry_hash"]
+            else:
+                row = conn.execute(
+                    "SELECT entry_hash FROM audit_log WHERE entry_id = %s", (entry_id,)
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"entry {entry_id!r} not found")
+                original_hash = row["entry_hash"]
+            conn.execute(
+                "UPDATE audit_log SET entry_hash = %s WHERE entry_id = %s",
+                ("0" * 64, entry_id),
+            )
+            conn.commit()
+        return {"entry_id": entry_id, "original_hash": original_hash}
+
+    def demo_restore_entry(self, entry_id: str, original_hash: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE audit_log SET entry_hash = %s WHERE entry_id = %s",
+                (original_hash, entry_id),
+            )
+            conn.commit()
 
     def query(
         self,
         *,
         process: str | None = None,
         event_type: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        order: str = "asc",
     ) -> list[AuditLogEntry]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -148,7 +192,11 @@ class PostgresAuditLogStore:
             clauses.append("event_type = %s")
             params.append(event_type)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        sql = f"SELECT * FROM audit_log {where} ORDER BY rowid ASC"
+        direction = "DESC" if order == "desc" else "ASC"
+        sql = f"SELECT * FROM audit_log {where} ORDER BY rowid {direction}"
+        if limit is not None:
+            sql += " LIMIT %s OFFSET %s"
+            params.extend([limit, offset])
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
         entries: list[AuditLogEntry] = []

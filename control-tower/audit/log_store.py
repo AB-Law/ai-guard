@@ -115,26 +115,80 @@ class AuditLogStore:
         )
 
     def verify_chain(self) -> bool:
+        valid, _ = self.verify_chain_detailed()
+        return valid
+
+    def verify_chain_detailed(self) -> tuple[bool, str | None]:
+        """Like verify_chain(), but also names the first entry whose hash no
+        longer matches its payload — powers the tamper-demo banner so it can
+        say *which* row broke, not just that something did.
+        """
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT payload_json, timestamp, prev_hash, entry_hash FROM audit_log ORDER BY rowid ASC"
+                "SELECT entry_id, payload_json, timestamp, prev_hash, entry_hash "
+                "FROM audit_log ORDER BY rowid ASC"
             ).fetchall()
         expected_prev = GENESIS_PREV_HASH
         for row in rows:
             if row["prev_hash"] != expected_prev:
-                return False
+                return False, row["entry_id"]
             payload = json.loads(row["payload_json"])
             recomputed = compute_entry_hash(row["prev_hash"], payload, row["timestamp"])
             if recomputed != row["entry_hash"]:
-                return False
+                return False, row["entry_id"]
             expected_prev = row["entry_hash"]
-        return True
+        return True, None
+
+    def demo_corrupt_entry(self, entry_id: str | None = None) -> dict[str, str]:
+        """Debug/demo only: overwrite one entry's stored hash so verify_chain()
+        genuinely fails, for the tamper-detection demo in ARCHITECTURE.md §12.
+        Never called from the normal append/query path. Returns the entry_id
+        and its original hash so demo_restore_entry() can undo it.
+        """
+        with self._connect() as conn:
+            if entry_id is None:
+                row = conn.execute(
+                    "SELECT entry_id, entry_hash FROM audit_log ORDER BY rowid DESC LIMIT 1 OFFSET 2"
+                ).fetchone()
+                if row is None:
+                    row = conn.execute(
+                        "SELECT entry_id, entry_hash FROM audit_log ORDER BY rowid DESC LIMIT 1"
+                    ).fetchone()
+                if row is None:
+                    raise ValueError("no audit entries to tamper with")
+                entry_id = row["entry_id"]
+                original_hash = row["entry_hash"]
+            else:
+                row = conn.execute(
+                    "SELECT entry_hash FROM audit_log WHERE entry_id = ?", (entry_id,)
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"entry {entry_id!r} not found")
+                original_hash = row["entry_hash"]
+            conn.execute(
+                "UPDATE audit_log SET entry_hash = ? WHERE entry_id = ?",
+                ("0" * 64, entry_id),
+            )
+            conn.commit()
+        return {"entry_id": entry_id, "original_hash": original_hash}
+
+    def demo_restore_entry(self, entry_id: str, original_hash: str) -> None:
+        """Undo demo_corrupt_entry()."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE audit_log SET entry_hash = ? WHERE entry_id = ?",
+                (original_hash, entry_id),
+            )
+            conn.commit()
 
     def query(
         self,
         *,
         process: str | None = None,
         event_type: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        order: str = "asc",
     ) -> list[AuditLogEntry]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -145,7 +199,11 @@ class AuditLogStore:
             clauses.append("event_type = ?")
             params.append(event_type)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        sql = f"SELECT * FROM audit_log {where} ORDER BY rowid ASC"
+        direction = "DESC" if order == "desc" else "ASC"
+        sql = f"SELECT * FROM audit_log {where} ORDER BY rowid {direction}"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
         entries: list[AuditLogEntry] = []

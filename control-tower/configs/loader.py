@@ -21,6 +21,11 @@ _KNOWN_PROCESSES = KNOWN_PROCESSES
 class AllowedTool(BaseModel):
     name: str
     max_auto_amount: float | None = None
+    # Display hint only — gateway.py compares max_auto_amount against
+    # tool_args["amount"] regardless of what that number means. Most tools are
+    # dollar-denominated ("usd"); a tool like assign_risk_rating uses the same
+    # field for a rating ceiling, so the UI needs to know how to label it.
+    unit: str = "usd"
 
 
 class ApprovalThreshold(BaseModel):
