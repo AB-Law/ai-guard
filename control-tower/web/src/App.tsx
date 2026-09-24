@@ -14,22 +14,29 @@ import { ConfigPage } from './pages/ConfigPage'
 
 const queryClient = new QueryClient()
 
+/** Route table only — tests wrap this in MemoryRouter; production uses BrowserRouter. */
+export function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
+      <Route path="/applications" element={<ProtectedRoute><ApplicationsPage /></ProtectedRoute>} />
+      <Route path="/approvals" element={<ProtectedRoute><ApprovalsPage /></ProtectedRoute>} />
+      <Route path="/cases/:caseId" element={<ProtectedRoute><CaseDetailPage /></ProtectedRoute>} />
+      <Route path="/logs" element={<ProtectedRoute><LogsPage /></ProtectedRoute>} />
+      <Route path="/audit" element={<ProtectedRoute><AuditIntegrityPage /></ProtectedRoute>} />
+      <Route path="/config" element={<ProtectedRoute><ConfigPage /></ProtectedRoute>} />
+    </Routes>
+  )
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <ActiveProcessProvider>
           <BrowserRouter>
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
-              <Route path="/applications" element={<ProtectedRoute><ApplicationsPage /></ProtectedRoute>} />
-              <Route path="/approvals" element={<ProtectedRoute><ApprovalsPage /></ProtectedRoute>} />
-              <Route path="/cases/:caseId" element={<ProtectedRoute><CaseDetailPage /></ProtectedRoute>} />
-              <Route path="/logs" element={<ProtectedRoute><LogsPage /></ProtectedRoute>} />
-              <Route path="/audit" element={<ProtectedRoute><AuditIntegrityPage /></ProtectedRoute>} />
-              <Route path="/config" element={<ProtectedRoute><ConfigPage /></ProtectedRoute>} />
-            </Routes>
+            <AppRoutes />
           </BrowserRouter>
         </ActiveProcessProvider>
       </AuthProvider>

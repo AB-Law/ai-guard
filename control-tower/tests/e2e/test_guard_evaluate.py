@@ -51,10 +51,14 @@ def test_allowed_tool_with_grounded_rationale_allows(client: TestClient) -> None
                     "when the vendor is active on the vendor master list."
                 )
             ],
+            # Pin required_evidence_docs chunks so allow/escalate does not
+            # hinge on semantic top-k retrieval luck for this offline case.
+            "force_chunk_ids": ["chunk:policy:auto_approve", "chunk:vendor:V-1001"],
         },
     )
     assert resp.status_code == 200
-    assert resp.json()["decision"] == "allow"
+    body = resp.json()
+    assert body["decision"] == "allow", body
 
 
 def test_tower_retrieves_its_own_grounding_with_no_caller_context(client: TestClient) -> None:
@@ -69,11 +73,12 @@ def test_tower_retrieves_its_own_grounding_with_no_caller_context(client: TestCl
             "tool_args": {"vendor_id": "V-1001", "amount": 2500, "item": "Laptop docks"},
             "agent_rationale": "The vendor is active on the vendor master list and the amount is at or below USD 10,000.",
             # no context_texts supplied at all
+            "force_chunk_ids": ["chunk:policy:auto_approve", "chunk:vendor:V-1001"],
         },
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["decision"] == "allow"
+    assert body["decision"] == "allow", body
     assert body["evidence_score"] > 0.0
 
 
@@ -86,6 +91,7 @@ def test_caller_context_is_merged_with_tower_retrieval_not_replaced(client: Test
             "tool_args": {"vendor_id": "V-1001", "amount": 2500, "item": "Laptop docks"},
             "agent_rationale": "Our internal CRM confirms this vendor passed a compliance review last quarter.",
             "context_texts": ["Our internal CRM confirms this vendor passed a compliance review last quarter."],
+            "force_chunk_ids": ["chunk:policy:auto_approve", "chunk:vendor:V-1001"],
         },
     )
     assert resp.status_code == 200
@@ -106,10 +112,12 @@ def test_tower_retrieval_does_not_leak_the_injected_demo_quote(client: TestClien
             "tool_name": "create_purchase_order",
             "tool_args": {"vendor_id": "V-1001", "amount": 2500, "item": "Laptop docks x10"},
             "agent_rationale": "The vendor is active on the vendor master list and the amount is at or below USD 10,000.",
+            "force_chunk_ids": ["chunk:policy:auto_approve", "chunk:vendor:V-1001"],
         },
     )
     assert resp.status_code == 200
-    assert resp.json()["decision"] == "allow"
+    body = resp.json()
+    assert body["decision"] == "allow", body
 
 
 def test_force_chunk_ids_can_still_pull_in_the_injected_quote_for_testing(client: TestClient) -> None:

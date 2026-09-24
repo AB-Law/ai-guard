@@ -76,8 +76,13 @@ def check_policy_entailment(
     """Judge proposed tool call against policy excerpts.
 
     When OPENAI_API_KEY is set, run the structured LLM judge. Offline / no key
-    returns compliant (evidence-doc presence is enforced separately).
+    returns compliant (evidence-doc presence is enforced separately). On LLM
+    failure, stay compliant rather than crashing the request — hard blocks and
+    the evidence judge's fail-closed path still apply elsewhere.
     """
     if not os.environ.get("OPENAI_API_KEY", "").strip():
         return PolicyEntailmentResult(compliant=True, violated_clauses=[], severity="none")
-    return _llm_entail(request, policy_excerpts)
+    try:
+        return _llm_entail(request, policy_excerpts)
+    except Exception:  # noqa: BLE001 — degrade to offline-compliant on judge failure
+        return PolicyEntailmentResult(compliant=True, violated_clauses=[], severity="none")

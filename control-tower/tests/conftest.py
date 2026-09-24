@@ -34,6 +34,12 @@ def _isolate_openai_key(request: pytest.FixtureRequest, monkeypatch: pytest.Monk
     pytest process — including guardrails' LLM-judge auto-selection, which
     otherwise keys off OPENAI_API_KEY presence alone (see output_verifier.py).
     Only @pytest.mark.live tests intend to exercise that path for real.
+
+    Set the var to empty (do not delenv): python-dotenv's default
+    ``load_dotenv(override=False)`` will not overwrite an existing empty
+    value, but *will* re-inject the real key after a delenv — which then
+    fails the judge closed and turns clean /guard/evaluate allows into
+    escalates mid-suite.
     """
     if request.node.get_closest_marker("live") is None:
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "")
