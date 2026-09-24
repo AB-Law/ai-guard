@@ -14,14 +14,21 @@ def evaluate_tool_call(
     *,
     retrieved_texts: list[str] | None = None,
     context_chunks: list[str] | None = None,
+    injection_flags: list[InjectionFlag] | None = None,
     audit: AuditLogStore,
 ) -> GatewayDecision:
-    """Run injection scan, verification, scoring, gateway decision, and audit append."""
-    all_flags: list[InjectionFlag] = []
-    if retrieved_texts:
-        for text in retrieved_texts:
-            result = injection_guard.scan(text)
-            all_flags.extend(result.flags)
+    """Run injection scan, verification, scoring, gateway decision, and audit append.
+
+    When injection_flags is provided (e.g. precomputed by the graph's
+    scan_injection node), skip re-scanning so the LLM classifier runs at most
+    once per request. Otherwise batch-scan retrieved_texts.
+    """
+    if injection_flags is not None:
+        all_flags: list[InjectionFlag] = list(injection_flags)
+    elif retrieved_texts:
+        all_flags = list(injection_guard.scan(retrieved_texts).flags)
+    else:
+        all_flags = []
 
     if all_flags:
         audit.append(
