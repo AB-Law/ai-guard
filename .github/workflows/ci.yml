@@ -39,11 +39,11 @@ jobs:
           uv pip install -e ".[dev]" -e "./sdk/aiguard[langchain]"
 
       - name: Ruff
-        run: "$VIRTUAL_ENV/bin/ruff" check .
+        run: $VIRTUAL_ENV/bin/ruff check .
 
       - name: Pytest (offline suite)
         # addopts already excludes @pytest.mark.live and @pytest.mark.postgres
-        run: "$VIRTUAL_ENV/bin/pytest" -q
+        run: $VIRTUAL_ENV/bin/pytest -q
 
   sdk:
     name: AiGuard SDK
@@ -69,4 +69,4 @@ jobs:
           uv pip install -e ".[dev,langchain]"
 
       - name: Pytest
-        run: "$VIRTUAL_ENV/bin/pytest" -q
+        run: $VIRTUAL_ENV/bin/pytest -q
