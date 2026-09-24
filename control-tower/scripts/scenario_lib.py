@@ -109,23 +109,24 @@ def run_scenario(
     if expected.get("require_injection_flag") and "injection_flag" not in event_types:
         errors.append("expected injection_flag audit event")
 
-    if "min_evidence_score" in expected and evidence is not None:
-        if float(evidence) < float(expected["min_evidence_score"]):
-            errors.append(
-                f"evidence_score {evidence} < min {expected['min_evidence_score']}"
-            )
+    if "min_evidence_score" in expected and evidence is not None and float(
+        evidence
+    ) < float(expected["min_evidence_score"]):
+        errors.append(
+            f"evidence_score {evidence} < min {expected['min_evidence_score']}"
+        )
 
-    if "max_evidence_score" in expected and evidence is not None:
-        if float(evidence) > float(expected["max_evidence_score"]):
-            errors.append(
-                f"evidence_score {evidence} > max {expected['max_evidence_score']}"
-            )
+    if "max_evidence_score" in expected and evidence is not None and float(
+        evidence
+    ) > float(expected["max_evidence_score"]):
+        errors.append(
+            f"evidence_score {evidence} > max {expected['max_evidence_score']}"
+        )
 
-    if "final_status" in expected:
-        if result.get("status") != expected["final_status"]:
-            errors.append(
-                f"status={result.get('status')!r} expected {expected['final_status']!r}"
-            )
+    if "final_status" in expected and result.get("status") != expected["final_status"]:
+        errors.append(
+            f"status={result.get('status')!r} expected {expected['final_status']!r}"
+        )
 
     if not audit.verify_chain():
         errors.append("audit chain verification failed")

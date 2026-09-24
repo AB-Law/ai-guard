@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator, MutableMapping
+from collections.abc import Callable, Iterator, MutableMapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from audit.backend import is_postgres_url
 
@@ -123,7 +123,7 @@ class _PostgresJSONMap(MutableMapping):
             )
             conn.commit()
 
-    def _connect(self) -> "psycopg.Connection":
+    def _connect(self) -> psycopg.Connection:
         import psycopg  # lazy — only needed when the postgres tier is selected
 
         return psycopg.connect(self.conn_string)

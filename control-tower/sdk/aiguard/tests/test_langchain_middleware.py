@@ -8,10 +8,9 @@ import pytest
 
 pytest.importorskip("langchain.agents.middleware")
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
-from langchain_core.tools import tool  # noqa: E402
-
-from aiguard.langchain_middleware import AiGuardMiddleware  # noqa: E402
+from aiguard.langchain_middleware import AiGuardMiddleware
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.tools import tool
 
 
 def _client_returning(decision: str, **extra) -> MagicMock:

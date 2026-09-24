@@ -7,7 +7,7 @@ from scripts.demo_pack import (
     fixture_to_submit_body,
     load_rehearsal_bodies,
 )
-from scripts.scenario_lib import load_fixture, list_fixtures
+from scripts.scenario_lib import list_fixtures, load_fixture
 
 
 def test_fixture_to_submit_body_omits_resume() -> None:

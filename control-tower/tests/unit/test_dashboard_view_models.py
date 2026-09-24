@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from dashboard.view_models import (
     audit_to_timeline,
@@ -228,7 +228,7 @@ def test_badge_kinds_and_labels() -> None:
 
 
 def test_make_live_case_id() -> None:
-    now = datetime(2026, 9, 23, 19, 45, 32, tzinfo=timezone.utc)
+    now = datetime(2026, 9, 23, 19, 45, 32, tzinfo=UTC)
     assert make_live_case_id("V-1001", now=now) == "live-V-1001-194532"
     assert make_live_case_id("weird vendor!!", now=now) == "live-weird-vendor-194532"
     assert make_live_case_id("", now=now) == "live-case-194532"
@@ -236,7 +236,7 @@ def test_make_live_case_id() -> None:
 
 
 def test_unique_live_case_id_collision() -> None:
-    now = datetime(2026, 9, 23, 19, 45, 32, tzinfo=timezone.utc)
+    now = datetime(2026, 9, 23, 19, 45, 32, tzinfo=UTC)
     base = "live-V-1001-194532"
     assert unique_live_case_id("V-1001", set(), now=now) == base
     collided = unique_live_case_id("V-1001", {base}, now=now)
@@ -258,7 +258,7 @@ def test_short_timestamp() -> None:
 
 
 def test_relative_age() -> None:
-    now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
     assert relative_age("2026-01-01T11:59:50+00:00", now=now) == "now"
     assert relative_age("2026-01-01T11:50:00+00:00", now=now) == "10m"
     assert relative_age("2026-01-01T09:00:00+00:00", now=now) == "3h"

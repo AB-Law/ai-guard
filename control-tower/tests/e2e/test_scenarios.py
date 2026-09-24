@@ -8,7 +8,6 @@ import pytest
 
 from scripts.scenario_lib import list_fixtures, load_fixture, run_scenario
 
-
 FIXTURE_PATHS = list_fixtures()
 FIXTURE_IDS = [p.stem for p in FIXTURE_PATHS]
 

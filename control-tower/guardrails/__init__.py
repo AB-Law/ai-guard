@@ -7,11 +7,11 @@ from guardrails.output_verifier import verify, verify_evidence
 from guardrails.risk_scorer import score
 
 __all__ = [
-    "evaluate_tool_call",
     "classify_policy_hit",
     "decide",
+    "evaluate_tool_call",
     "scan",
+    "score",
     "verify",
     "verify_evidence",
-    "score",
 ]

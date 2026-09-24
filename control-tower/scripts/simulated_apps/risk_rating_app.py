@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import aiguard
 from aiguard.exceptions import AiGuardBlocked, AiGuardEscalated
@@ -36,14 +36,14 @@ _PROFILE_WEIGHTS = {
 
 
 class ScriptedModel(GenericFakeChatModel):
-    def bind_tools(self, tools, **kwargs):  # noqa: ANN001
+    def bind_tools(self, tools, **kwargs):
         return self
 
 
 class FixedRetriever(BaseRetriever):
     """Returns either clean policy or a poisoned customer-history doc."""
 
-    texts: list[str] = [_POLICY]
+    texts: ClassVar[list[str]] = [_POLICY]
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> list[Document]:
         return [Document(page_content=t) for t in self.texts]

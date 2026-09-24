@@ -26,12 +26,12 @@ from __future__ import annotations
 import aiguard
 from aiguard.langchain_middleware import AiGuardMiddleware
 from langchain.agents import create_agent
+from langchain_core.documents import Document
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.retrievers import BaseRetriever
 from langchain_core.tools import tool
 from langchain_core.tools.retriever import create_retriever_tool
-from langchain_core.documents import Document
-from langchain_core.retrievers import BaseRetriever
 
 aiguard.configure(api_url="http://127.0.0.1:8000", process="procurement_review")
 

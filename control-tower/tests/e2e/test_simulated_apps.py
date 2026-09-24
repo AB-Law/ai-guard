@@ -26,7 +26,7 @@ def tower(tmp_path: Path, project_root: Path) -> TestClient:
 def route_aiguard_through_tower(tower: TestClient):
     """GuardClient uses httpx.post(url); divert those to the in-process TestClient."""
 
-    def _post(url: str, json=None, timeout=None):  # noqa: ANN001
+    def _post(url: str, json=None, timeout=None):
         assert str(url).rstrip("/").endswith("/guard/evaluate")
         resp = tower.post("/guard/evaluate", json=json or {})
         mock = MagicMock()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -15,9 +15,9 @@ from pydantic import BaseModel, Field
 
 from agent.graph import build_graph, initial_state, resume_case, run_case
 from agent.tools import ToolSideEffects
-from audit.backend import build_audit_store
 from api.case_store_db import build_case_store
 from api.checkpointer import build_checkpointer
+from audit.backend import build_audit_store
 from configs.loader import KNOWN_PROCESSES, load_process
 from contracts.schemas import ToolCallRequest
 from guardrails import evaluate_tool_call
@@ -37,7 +37,7 @@ load_dotenv(_PROJECT_ROOT / ".env")
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _parse_created_at(value: Any) -> datetime | None:
@@ -48,12 +48,12 @@ def _parse_created_at(value: Any) -> datetime | None:
     if not text:
         return None
     try:
-        # Python 3.11+ accepts "+00:00"; tolerate a trailing "Z".
-        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        # Python 3.11+ accepts a trailing "Z" natively.
+        dt = datetime.fromisoformat(text)
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -322,7 +322,7 @@ def create_app(
 
         cutoff: datetime | None = None
         if since_minutes is not None:
-            cutoff = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
+            cutoff = datetime.now(UTC) - timedelta(minutes=since_minutes)
 
         rows = sorted(
             store.cases.values(),

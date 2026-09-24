@@ -7,6 +7,7 @@ picks between the two.
 from __future__ import annotations
 
 import json
+from datetime import UTC
 from typing import Any
 
 import psycopg
@@ -70,11 +71,11 @@ class PostgresAuditLogStore:
         return row["entry_hash"] if row else GENESIS_PREV_HASH
 
     def append(self, entry: AppendInput) -> AuditLogEntry:
-        from datetime import datetime, timezone
         import uuid
+        from datetime import datetime
 
         redacted_payload = redact_payload(entry.payload)
-        timestamp = entry.timestamp or datetime.now(timezone.utc).isoformat()
+        timestamp = entry.timestamp or datetime.now(UTC).isoformat()
         entry_id = entry.entry_id or str(uuid.uuid4())
 
         with self._connect() as conn:

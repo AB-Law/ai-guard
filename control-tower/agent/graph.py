@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -50,7 +50,7 @@ class ProposedToolPlan(BaseModel):
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _decision_to_dict(decision: GatewayDecision) -> dict[str, Any]:
@@ -393,8 +393,6 @@ def resume_case(
 
 def is_interrupted(result: dict[str, Any]) -> bool:
     """True if invoke returned while waiting on HITL (LangGraph sets __interrupt__)."""
-    if result.get("__interrupt__"):
-        return True
     # After interrupt, status may still be running until resume path sets it;
     # callers should also check graph.get_state for next tasks.
-    return False
+    return bool(result.get("__interrupt__"))
