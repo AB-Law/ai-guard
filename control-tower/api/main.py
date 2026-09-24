@@ -464,6 +464,7 @@ def create_app(
                     retrieved.append(forced_chunk)
         context_texts = [c.text for c in retrieved] + list(body.context_texts)
 
+        retrieved_ids = [c.id for c in retrieved]
         request = ToolCallRequest(
             call_id=call_id,
             process=body.process,
@@ -471,7 +472,7 @@ def create_app(
             tool_name=body.tool_name,
             tool_args=body.tool_args,
             agent_rationale=body.agent_rationale,
-            context_refs=[c.id for c in retrieved],
+            context_refs=retrieved_ids,
             timestamp=_utc_now(),
         )
         decision = evaluate_tool_call(
@@ -479,6 +480,7 @@ def create_app(
             config,
             retrieved_texts=context_texts,
             context_chunks=context_texts,
+            retrieved_chunk_ids=retrieved_ids,
             audit=app.state.audit,
         )
         # Surface SDK / external evaluations on /cases and /traffic/recent so

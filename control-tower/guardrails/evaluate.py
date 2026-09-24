@@ -4,8 +4,20 @@ from __future__ import annotations
 
 from audit.log_store import AppendInput, AuditLogStore
 from configs.loader import ProcessConfig
-from contracts.schemas import GatewayDecision, InjectionFlag, ToolCallRequest
-from guardrails import gateway, injection_guard, output_verifier, risk_scorer
+from contracts.schemas import (
+    GatewayDecision,
+    InjectionFlag,
+    PolicyEntailmentResult,
+    ToolCallRequest,
+)
+from guardrails import (
+    evidence_docs,
+    gateway,
+    injection_guard,
+    output_verifier,
+    policy_entailment,
+    risk_scorer,
+)
 
 
 def evaluate_tool_call(
@@ -15,13 +27,17 @@ def evaluate_tool_call(
     retrieved_texts: list[str] | None = None,
     context_chunks: list[str] | None = None,
     injection_flags: list[InjectionFlag] | None = None,
+    retrieved_chunk_ids: list[str] | None = None,
     audit: AuditLogStore,
 ) -> GatewayDecision:
-    """Run injection scan, verification, scoring, gateway decision, and audit append.
+    """Run injection scan, verification, policy entailment, scoring, gateway, audit.
 
     When injection_flags is provided (e.g. precomputed by the graph's
     scan_injection node), skip re-scanning so the LLM classifier runs at most
     once per request. Otherwise batch-scan retrieved_texts.
+
+    retrieved_chunk_ids are preferred for the required-evidence presence check;
+    falls back to request.context_refs when not supplied.
     """
     if injection_flags is not None:
         all_flags: list[InjectionFlag] = list(injection_flags)
@@ -48,11 +64,27 @@ def evaluate_tool_call(
         request.agent_rationale, chunks, request_facts=request.tool_args
     )
 
+    chunk_ids = (
+        list(retrieved_chunk_ids)
+        if retrieved_chunk_ids is not None
+        else list(request.context_refs)
+    )
+    missing = evidence_docs.missing_required_evidence_docs(config, chunk_ids)
+    if missing:
+        entailment = PolicyEntailmentResult(
+            compliant=False,
+            violated_clauses=[f"missing_evidence:{doc}" for doc in missing],
+            severity="hard",
+        )
+    else:
+        entailment = policy_entailment.check_policy_entailment(request, chunks)
+
     policy_hit = gateway.classify_policy_hit(request, config)
     risk_score, confidence_score, evidence_score = risk_scorer.score(
         injection_flags=all_flags,
         evidence_score=verification.evidence_score,
         policy_hit=policy_hit,
+        entailment_severity=entailment.severity,
     )
 
     decision = gateway.decide(
@@ -61,6 +93,7 @@ def evaluate_tool_call(
         risk_score=risk_score,
         evidence_score=evidence_score,
         confidence_score=confidence_score,
+        entailment=entailment,
     )
 
     audit.append(
@@ -73,6 +106,8 @@ def evaluate_tool_call(
                 "reason": decision.reason,
                 "policy_refs": decision.policy_refs,
                 "unsupported_claims": verification.unsupported_claims,
+                "entailment": entailment.model_dump(),
+                "missing_evidence_docs": missing,
             },
             scores=decision,
         )
