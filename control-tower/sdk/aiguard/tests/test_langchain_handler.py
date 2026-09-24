@@ -10,11 +10,10 @@ import pytest
 
 pytest.importorskip("langchain_core")
 
-from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
-from langchain_core.tools import tool  # noqa: E402
-
-from aiguard import AiGuardBlocked, AiGuardEscalated  # noqa: E402
-from aiguard.langchain_handler import AiGuardCallbackHandler  # noqa: E402
+from aiguard import AiGuardBlocked, AiGuardEscalated
+from aiguard.langchain_handler import AiGuardCallbackHandler
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.tools import tool
 
 
 def _handler_returning(decision: str) -> tuple[AiGuardCallbackHandler, MagicMock]:

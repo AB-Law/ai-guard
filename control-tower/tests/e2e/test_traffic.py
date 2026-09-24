@@ -186,8 +186,10 @@ def test_guard_evaluate_source_app_appears_in_traffic_recent(client: TestClient)
                 "the vendor is active on the vendor master list."
             ),
             "context_texts": [
-                "Purchase orders at or below USD 10,000 may be auto-approved when "
-                "the vendor is active on the vendor master list."
+                (
+                    "Purchase orders at or below USD 10,000 may be auto-approved when "
+                    "the vendor is active on the vendor master list."
+                )
             ],
             "source_app": "rag_bot_app",
             "call_id": "traffic-guard-src",

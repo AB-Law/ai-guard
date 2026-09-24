@@ -7,7 +7,7 @@ import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -71,7 +71,7 @@ class AuditLogStore:
 
     def append(self, entry: AppendInput) -> AuditLogEntry:
         redacted_payload = redact_payload(entry.payload)
-        timestamp = entry.timestamp or datetime.now(timezone.utc).isoformat()
+        timestamp = entry.timestamp or datetime.now(UTC).isoformat()
         entry_id = entry.entry_id or str(uuid.uuid4())
 
         with self._connect() as conn:

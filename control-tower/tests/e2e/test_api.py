@@ -205,7 +205,7 @@ def test_upload_does_not_leak_across_processes(
     content = (
         f"# Isolation fixture\n\n"
         f"Unique token {marker} for cross-process leak regression.\n"
-    ).encode("utf-8")
+    ).encode()
     filename = "isolation_marker_zx9q.md"
     dest: Path | None = None
     try:

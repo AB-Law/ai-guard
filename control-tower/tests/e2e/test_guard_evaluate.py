@@ -46,8 +46,10 @@ def test_allowed_tool_with_grounded_rationale_allows(client: TestClient) -> None
                 "when the vendor is active on the vendor master list."
             ),
             "context_texts": [
-                "Purchase orders at or below USD 10,000 may be auto-approved "
-                "when the vendor is active on the vendor master list."
+                (
+                    "Purchase orders at or below USD 10,000 may be auto-approved "
+                    "when the vendor is active on the vendor master list."
+                )
             ],
         },
     )

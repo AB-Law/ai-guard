@@ -119,8 +119,7 @@ class AegisApiClient:
         # Older APIs omit ``matched``; never report 0 when rows are present.
         matched_raw = body.get("matched")
         matched = len(cases) if matched_raw is None else int(matched_raw)
-        if matched < len(cases):
-            matched = len(cases)
+        matched = max(matched, len(cases))
         return {
             "cases": cases,
             "total_cases": int(body.get("total_cases") or 0),

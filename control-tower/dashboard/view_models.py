@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 _VENDOR_SAFE = re.compile(r"[^A-Za-z0-9_-]+")
@@ -40,7 +40,7 @@ def make_live_case_id(
     """Human-readable id for dashboard live submits: ``live-{vendor}-{HHMMSS}``."""
     raw = (vendor_id or "").strip() or "case"
     vendor = _VENDOR_SAFE.sub("-", raw).strip("-_") or "case"
-    stamp = (now or datetime.now(timezone.utc)).strftime("%H%M%S")
+    stamp = (now or datetime.now(UTC)).strftime("%H%M%S")
     base = f"live-{vendor}-{stamp}"
     if suffix:
         return f"{base}-{suffix}"
@@ -84,14 +84,14 @@ def relative_age(value: Any, *, now: datetime | None = None) -> str:
     if not text:
         return ""
     try:
-        created = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        created = datetime.fromisoformat(text)
     except ValueError:
         return ""
     if created.tzinfo is None:
-        created = created.replace(tzinfo=timezone.utc)
-    anchor = now or datetime.now(timezone.utc)
+        created = created.replace(tzinfo=UTC)
+    anchor = now or datetime.now(UTC)
     if anchor.tzinfo is None:
-        anchor = anchor.replace(tzinfo=timezone.utc)
+        anchor = anchor.replace(tzinfo=UTC)
     seconds = max(0, int((anchor - created).total_seconds()))
     if seconds < 45:
         return "now"

@@ -30,9 +30,12 @@ def classify_policy_hit(request: ToolCallRequest, config: ProcessConfig) -> Poli
         return "unknown"
     tool = allowed[request.tool_name]
     amount = _amount_from_request(request)
-    if tool.max_auto_amount is not None and amount is not None:
-        if amount > tool.max_auto_amount:
-            return "over_limit"
+    if (
+        tool.max_auto_amount is not None
+        and amount is not None
+        and amount > tool.max_auto_amount
+    ):
+        return "over_limit"
     return "none"
 
 
@@ -81,21 +84,24 @@ def decide(
 
     tool = allowed[request.tool_name]
     amount = _amount_from_request(request)
-    if tool.max_auto_amount is not None and amount is not None:
-        if amount > tool.max_auto_amount:
-            ref = f"max_auto_amount:{int(tool.max_auto_amount)}"
-            return GatewayDecision(
-                call_id=request.call_id,
-                decision="escalate",
-                reason=(
-                    f"Amount {amount} exceeds auto-approve limit "
-                    f"{tool.max_auto_amount} for {request.tool_name!r}."
-                ),
-                policy_refs=[ref, request.tool_name],
-                risk_score=risk_score,
-                confidence_score=confidence_score,
-                evidence_score=evidence_score,
-            )
+    if (
+        tool.max_auto_amount is not None
+        and amount is not None
+        and amount > tool.max_auto_amount
+    ):
+        ref = f"max_auto_amount:{int(tool.max_auto_amount)}"
+        return GatewayDecision(
+            call_id=request.call_id,
+            decision="escalate",
+            reason=(
+                f"Amount {amount} exceeds auto-approve limit "
+                f"{tool.max_auto_amount} for {request.tool_name!r}."
+            ),
+            policy_refs=[ref, request.tool_name],
+            risk_score=risk_score,
+            confidence_score=confidence_score,
+            evidence_score=evidence_score,
+        )
 
     if risk_score >= threshold:
         return GatewayDecision(

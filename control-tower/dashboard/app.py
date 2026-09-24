@@ -702,8 +702,7 @@ def main() -> None:
             return
         traffic_cases = payload.get("cases") or []
         matched = int(payload.get("matched") or 0)
-        if matched < len(traffic_cases):
-            matched = len(traffic_cases)
+        matched = max(matched, len(traffic_cases))
         total_retained = int(payload.get("total_cases") or 0)
 
         connected_sources = sorted(
@@ -953,7 +952,7 @@ def main() -> None:
         if st.button("Ask", key=f"invest-ask-{selected}", type="primary"):
             try:
                 result = client.investigate(question, case_id=selected)
-            except Exception:
+            except Exception:  # noqa: BLE001 — fall back to offline mock on any API failure
                 mock = offline_investigate_mock(
                     question,
                     case_id=selected,

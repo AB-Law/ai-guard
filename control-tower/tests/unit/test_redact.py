@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import re
 
-import pytest
-
 from audit.log_store import AppendInput, AuditLogStore
 from audit.redact import redact_payload
 

@@ -40,7 +40,7 @@ _PROFILE_WEIGHTS = {
 
 
 class ScriptedModel(GenericFakeChatModel):
-    def bind_tools(self, tools, **kwargs):  # noqa: ANN001
+    def bind_tools(self, tools, **kwargs):
         return self
 
 
