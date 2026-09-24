@@ -35,8 +35,9 @@ jobs:
       - name: Create venv and install
         run: |
           uv venv --clear "$VIRTUAL_ENV"
-          # Simulated-app e2e tests import the SDK (scripts/simulated_apps/*).
-          uv pip install -e ".[dev]" -e "./sdk/aiguard[langchain]"
+          # scale = sqlite checkpoint saver used by storage e2e; postgres tests
+          # stay skipped via -m 'not postgres'. SDK needed by simulated-app e2e.
+          uv pip install -e ".[dev,scale]" -e "./sdk/aiguard[langchain]"
 
       - name: Ruff
         run: $VIRTUAL_ENV/bin/ruff check .
