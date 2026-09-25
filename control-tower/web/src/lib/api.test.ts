@@ -78,7 +78,44 @@ describe('api client', () => {
   it('configs / audit / applications', async () => {
     const cfg = await api.listConfigs()
     expect(cfg.processes).toHaveLength(2)
+    const schema = await api.getProcessSchema()
+    expect(schema.title).toBe('ProcessConfig')
+    const created = await api.createProcessFromSchema({
+      process: 'api_test_proc',
+      title: 'API Test',
+      allowed_tools: [{ name: 'approve_claim', max_auto_amount: 100, unit: 'usd' }],
+      disallowed_tools: ['pay_out'],
+      required_evidence_docs: ['finance_policy'],
+      approval_threshold: { risk_score_gte: 70 },
+      knowledge_base_paths: [],
+    })
+    expect(created.id).toBe('api_test_proc')
+    const legacy = await api.createProcess({ title: 'Legacy Create' })
+    expect(legacy.title).toBe('Legacy Create')
+  })
 
+  it('createProcessFromSchema surfaces field errors on 422', async () => {
+    server.use(
+      http.post('*/api/processes', () =>
+        HttpResponse.json(
+          { detail: [{ loc: ['process'], msg: 'already exists', type: 'process_exists' }] },
+          { status: 422 },
+        ),
+      ),
+    )
+    await expect(
+      api.createProcessFromSchema({
+        process: 'dup',
+        allowed_tools: [],
+        disallowed_tools: [],
+        required_evidence_docs: [],
+        approval_threshold: { risk_score_gte: 60 },
+        knowledge_base_paths: [],
+      }),
+    ).rejects.toBeInstanceOf(api.ProcessValidationError)
+  })
+
+  it('audit / applications', async () => {
     const verify = await api.verifyAudit()
     expect(verify.valid).toBe(true)
 

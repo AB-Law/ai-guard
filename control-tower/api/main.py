@@ -32,6 +32,7 @@ from configs.loader import (
     known_processes,
     load_process,
 )
+from configs.validate import process_config_json_schema, validate_new_process
 from contracts.schemas import GatewayDecision, ToolCallRequest
 from guardrails import evaluate_tool_call, is_hard_block
 from guardrails.rule_store import get_rule_store
@@ -1285,6 +1286,56 @@ def create_app(
     def _write_process_yaml(process_id: str, cfg: dict[str, Any]) -> None:
         path = root / "configs" / f"{process_id}.yaml"
         path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+
+    @app.get("/processes/schema", dependencies=[Depends(require_dashboard_token)])
+    def get_process_schema() -> dict[str, Any]:
+        """JSON Schema for ProcessConfig — drives the New Process wizard form."""
+        return process_config_json_schema()
+
+    @app.post("/processes", dependencies=[Depends(require_dashboard_token)])
+    async def create_process_from_schema(request: Request) -> dict[str, Any]:
+        """Create configs/<process>.yaml from a full ProcessConfig payload.
+
+        Returns FastAPI-style 422 field errors (unknown tool, unknown
+        evidence-doc type, process exists, …) instead of a generic failure.
+        The gateway picks up the new file via mtime cache — no restart.
+        """
+        raw = await request.json()
+        if not isinstance(raw, dict):
+            raise HTTPException(
+                status_code=422,
+                detail=[{"loc": ["body"], "msg": "request body must be an object", "type": "type_error"}],
+            )
+        configs_dir = root / "configs"
+        configs_dir.mkdir(parents=True, exist_ok=True)
+        # Defaults the wizard may omit — still required on ProcessConfig.
+        payload = {
+            "allowed_tools": [],
+            "disallowed_tools": [],
+            "required_evidence_docs": [],
+            "knowledge_base_paths": [],
+            "approval_threshold": {"risk_score_gte": 60},
+            **raw,
+        }
+        if "approval_threshold" in raw and isinstance(raw["approval_threshold"], int):
+            payload["approval_threshold"] = {"risk_score_gte": raw["approval_threshold"]}
+        result = validate_new_process(payload, configs_dir=configs_dir)
+        if isinstance(result, list):
+            raise HTTPException(status_code=422, detail=result)
+        cfg = result.model_dump(mode="python")
+        _write_process_yaml(result.process, cfg)
+        title = result.title or result.process.replace("_", " ").title()
+        return {
+            "id": result.process,
+            "title": title,
+            "config_path": f"configs/{result.process}.yaml",
+            "allowed_tools": cfg["allowed_tools"],
+            "disallowed_tools": cfg["disallowed_tools"],
+            "approval_threshold": cfg["approval_threshold"],
+            "required_evidence_docs": cfg["required_evidence_docs"],
+            "seed_docs": [Path(p).name for p in result.knowledge_base_paths],
+            "uploaded_docs": [],
+        }
 
     @app.post("/configs", dependencies=[Depends(require_dashboard_token)])
     def create_process(body: CreateProcessBody) -> dict[str, Any]:

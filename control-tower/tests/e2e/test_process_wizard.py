@@ -194,3 +194,106 @@ def test_uploaded_file_is_tagged_uploaded_not_custom(client: TestClient, project
 def test_delete_document_rejects_path_traversal(client: TestClient) -> None:
     resp = client.delete("/knowledge/documents/procurement_review/../../configs/finance.yaml")
     assert resp.status_code in (400, 404)
+
+
+def test_process_schema_endpoint_exposes_process_config(client: TestClient) -> None:
+    resp = client.get("/processes/schema")
+    assert resp.status_code == 200
+    schema = resp.json()
+    assert schema["title"] == "ProcessConfig"
+    assert "process" in schema["properties"]
+    assert "finance_policy" in schema["properties"]["required_evidence_docs"]["items"]["enum"]
+    assert "x-known-tools" in schema
+
+
+def test_post_processes_returns_field_level_errors(client: TestClient) -> None:
+    resp = client.post(
+        "/processes",
+        json={
+            "process": "bad_evidence_proc",
+            "allowed_tools": [{"name": "approve_claim"}],
+            "disallowed_tools": [],
+            "required_evidence_docs": ["not_a_real_doc"],
+            "approval_threshold": {"risk_score_gte": 60},
+            "knowledge_base_paths": [],
+        },
+    )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert any(e.get("type") == "unknown_evidence_doc" for e in detail)
+    assert any(e.get("loc") == ["required_evidence_docs", 0] for e in detail)
+
+    empty_tool = client.post(
+        "/processes",
+        json={
+            "process": "empty_tool_proc",
+            "allowed_tools": [{"name": ""}],
+            "disallowed_tools": [],
+            "required_evidence_docs": ["finance_policy"],
+            "approval_threshold": {"risk_score_gte": 60},
+            "knowledge_base_paths": [],
+        },
+    )
+    assert empty_tool.status_code == 422
+    assert any(e.get("type") == "unknown_tool" for e in empty_tool.json()["detail"])
+
+
+def test_sixth_process_via_post_processes_enforced_by_gateway_without_reload(
+    client: TestClient, project_root: Path
+) -> None:
+    """Submit a 6th sample process through the schema wizard API; the gateway
+    must enforce allow/deny/amount limits with zero code changes and no reload.
+    """
+    process_id = "claims_review"
+    try:
+        create = client.post(
+            "/processes",
+            json={
+                "process": process_id,
+                "title": "Claims Review",
+                "allowed_tools": [
+                    {"name": "approve_claim", "max_auto_amount": 2000, "unit": "usd"}
+                ],
+                "disallowed_tools": ["pay_out"],
+                "required_evidence_docs": ["finance_policy"],
+                "approval_threshold": {"risk_score_gte": 70},
+                "knowledge_base_paths": [],
+            },
+        )
+        assert create.status_code == 200, create.text
+        body = create.json()
+        assert body["id"] == process_id
+        assert (project_root / "configs" / f"{process_id}.yaml").is_file()
+
+        listed = client.get("/configs").json()["processes"]
+        assert any(p["id"] == process_id for p in listed)
+        # Six processes on disk while this YAML exists (5 shipped + claims_review).
+        assert len(listed) >= 6
+
+        blocked = client.post(
+            "/guard/evaluate",
+            json={
+                "process": process_id,
+                "tool_name": "pay_out",
+                "tool_args": {"amount": 100},
+                "agent_rationale": "Pay the claim.",
+            },
+        )
+        assert blocked.status_code == 200, blocked.text
+        assert blocked.json()["decision"] == "block"
+
+        over_ceiling = client.post(
+            "/guard/evaluate",
+            json={
+                "process": process_id,
+                "tool_name": "approve_claim",
+                "tool_args": {"amount": 5000},
+                "agent_rationale": "Approve a large claim.",
+                "force_chunk_ids": ["chunk:policy:auto_approve"],
+            },
+        )
+        assert over_ceiling.status_code == 200, over_ceiling.text
+        assert over_ceiling.json()["decision"] == "escalate"
+        assert "max_auto" in over_ceiling.json()["reason"].lower() or "2000" in over_ceiling.json()["reason"]
+    finally:
+        _cleanup_process(project_root, process_id)

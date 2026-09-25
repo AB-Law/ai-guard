@@ -77,6 +77,97 @@ export const handlers = [
 
   http.get(api('/configs'), () => HttpResponse.json(configsState)),
 
+  http.get(api('/processes/schema'), () =>
+    HttpResponse.json({
+      title: 'ProcessConfig',
+      type: 'object',
+      required: [
+        'process',
+        'allowed_tools',
+        'disallowed_tools',
+        'required_evidence_docs',
+        'approval_threshold',
+        'knowledge_base_paths',
+      ],
+      properties: {
+        process: { type: 'string' },
+        title: { type: ['string', 'null'] },
+        allowed_tools: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              max_auto_amount: { type: ['number', 'null'] },
+              unit: { type: 'string' },
+            },
+            required: ['name'],
+          },
+        },
+        disallowed_tools: { type: 'array', items: { type: 'string' } },
+        required_evidence_docs: {
+          type: 'array',
+          items: {
+            type: 'string',
+            enum: [
+              'finance_policy',
+              'kyc_policy',
+              'procurement_policy',
+              'rag_bot_policy',
+              'risk_rating_policy',
+              'vendor_master_list',
+            ],
+          },
+        },
+        approval_threshold: {
+          type: 'object',
+          properties: { risk_score_gte: { type: 'integer', minimum: 0, maximum: 100 } },
+          required: ['risk_score_gte'],
+        },
+        knowledge_base_paths: { type: 'array', items: { type: 'string' } },
+      },
+      'x-known-tools': ['create_purchase_order', 'approve_claim', 'submit_expense_report'],
+    }),
+  ),
+
+  http.post(api('/processes'), async ({ request }) => {
+    const body = (await request.json()) as {
+      process: string
+      title?: string | null
+      allowed_tools?: unknown[]
+      disallowed_tools?: string[]
+      required_evidence_docs?: string[]
+      approval_threshold?: { risk_score_gte: number }
+      knowledge_base_paths?: string[]
+    }
+    if (!body.process || !/^[a-z][a-z0-9_]*$/.test(body.process)) {
+      return HttpResponse.json(
+        {
+          detail: [
+            {
+              loc: ['process'],
+              msg: 'process id must start with a lowercase letter',
+              type: 'invalid_process_id',
+            },
+          ],
+        },
+        { status: 422 },
+      )
+    }
+    const created = {
+      id: body.process,
+      title: body.title || body.process.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+      config_path: `configs/${body.process}.yaml`,
+      allowed_tools: (body.allowed_tools as typeof configsState.processes[0]['allowed_tools']) ?? [],
+      disallowed_tools: body.disallowed_tools ?? [],
+      approval_threshold: body.approval_threshold ?? { risk_score_gte: 60 },
+      seed_docs: [],
+      uploaded_docs: [],
+    }
+    configsState = { processes: [...configsState.processes, created] }
+    return HttpResponse.json(created)
+  }),
+
   http.post(api('/configs'), async ({ request }) => {
     const body = (await request.json()) as { title: string; approval_threshold?: number }
     const id = body.title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')

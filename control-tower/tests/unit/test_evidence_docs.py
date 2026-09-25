@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from configs.loader import load_process
-from guardrails.evidence_docs import missing_required_evidence_docs
+from guardrails.evidence_docs import known_evidence_doc_types, missing_required_evidence_docs
+
+
+def test_known_evidence_doc_types_covers_shipped_labels() -> None:
+    known = set(known_evidence_doc_types())
+    assert "finance_policy" in known
+    assert "procurement_policy" in known
+    assert "vendor_master_list" in known
 
 
 def test_empty_refs_misses_all_required() -> None:
