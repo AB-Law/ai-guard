@@ -1,0 +1,19 @@
+{"id": "procurement_present_both", "category": "present", "process": "procurement_review", "chunk_ids": ["chunk:policy:auto_approve", "chunk:vendor:V-1001"], "expected_missing": []}
+{"id": "procurement_missing_empty", "category": "missing", "process": "procurement_review", "chunk_ids": [], "expected_missing": ["procurement_policy", "vendor_master_list"]}
+{"id": "procurement_missing_wrong_namespace", "category": "missing", "process": "procurement_review", "chunk_ids": ["chunk:doc:procurement_policy", "chunk:injected:quote"], "expected_missing": ["procurement_policy", "vendor_master_list"]}
+{"id": "procurement_partial_vendor_only", "category": "partial", "process": "procurement_review", "chunk_ids": ["chunk:vendor:V-1001"], "expected_missing": ["procurement_policy"]}
+{"id": "procurement_partial_policy_only", "category": "partial", "process": "procurement_review", "chunk_ids": ["chunk:policy:auto_approve"], "expected_missing": ["vendor_master_list"]}
+{"id": "kyc_present", "category": "present", "process": "onboarding_kyc", "chunk_ids": ["chunk:kyc:identity_verification"], "expected_missing": []}
+{"id": "kyc_missing_empty", "category": "missing", "process": "onboarding_kyc", "chunk_ids": [], "expected_missing": ["kyc_policy"]}
+{"id": "kyc_missing_policy_prefix", "category": "missing", "process": "onboarding_kyc", "chunk_ids": ["chunk:policy:identity_verification"], "expected_missing": ["kyc_policy"]}
+{"id": "finance_present", "category": "present", "process": "finance", "chunk_ids": ["chunk:policy:expense_limits"], "expected_missing": []}
+{"id": "finance_missing_empty", "category": "missing", "process": "finance", "chunk_ids": [], "expected_missing": ["finance_policy"]}
+{"id": "risk_rating_present", "category": "present", "process": "risk_rating", "chunk_ids": ["chunk:policy:rating_bands"], "expected_missing": []}
+{"id": "risk_rating_missing_empty", "category": "missing", "process": "risk_rating", "chunk_ids": [], "expected_missing": ["risk_rating_policy"]}
+{"id": "rag_bot_present", "category": "present", "process": "rag_bot", "chunk_ids": ["chunk:policy:retrieval_rules"], "expected_missing": []}
+{"id": "rag_bot_missing_empty", "category": "missing", "process": "rag_bot", "chunk_ids": [], "expected_missing": ["rag_bot_policy"]}
+{"id": "unknown_label_substring_hit", "category": "present", "required_evidence_docs": ["custom_handbook"], "chunk_ids": ["chunk:doc:custom_handbook:section_0"], "expected_missing": []}
+{"id": "unknown_label_substring_miss", "category": "missing", "required_evidence_docs": ["custom_handbook"], "chunk_ids": ["chunk:policy:auto_approve"], "expected_missing": ["custom_handbook"]}
+{"id": "unknown_label_case_insensitive", "category": "present", "required_evidence_docs": ["Custom_Handbook"], "chunk_ids": ["chunk:doc:CUSTOM_HANDBOOK:full"], "expected_missing": []}
+{"id": "empty_required_docs", "category": "present", "required_evidence_docs": [], "chunk_ids": [], "expected_missing": []}
+{"id": "multi_unknown_partial", "category": "partial", "required_evidence_docs": ["alpha_doc", "beta_doc"], "chunk_ids": ["chunk:doc:alpha_doc"], "expected_missing": ["beta_doc"]}
