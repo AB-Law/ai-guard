@@ -7,6 +7,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
+    // SDK README lives in ../sdk and is imported raw by the developers page.
+    fs: { allow: ['..'] },
     proxy: {
       '/api': {
         target: process.env.AEGIS_API_URL || 'http://127.0.0.1:8000',

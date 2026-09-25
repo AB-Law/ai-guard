@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider } from './lib/auth'
 import { ActiveProcessProvider } from './lib/processConfig'
 import { ProtectedRoute } from './components/ProtectedRoute'
+import { AppShell } from './components/layout/AppShell'
 import { LoginPage } from './pages/LoginPage'
 import { OverviewPage } from './pages/OverviewPage'
 import { ApplicationsPage } from './pages/ApplicationsPage'
@@ -12,6 +13,7 @@ import { CaseDetailPage } from './pages/CaseDetailPage'
 import { LogsPage } from './pages/LogsPage'
 import { AuditIntegrityPage } from './pages/AuditIntegrityPage'
 import { ConfigPage } from './pages/ConfigPage'
+import { DevelopersPage } from './pages/DevelopersPage'
 
 const queryClient = new QueryClient()
 
@@ -20,6 +22,7 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/developers" element={<AppShell><DevelopersPage /></AppShell>} />
       <Route path="/" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
       <Route path="/applications" element={<ProtectedRoute><ApplicationsPage /></ProtectedRoute>} />
       <Route path="/processes/new" element={<ProtectedRoute><ProcessWizardPage /></ProtectedRoute>} />
