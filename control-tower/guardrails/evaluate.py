@@ -54,6 +54,7 @@ def evaluate_tool_call(
                 event_type="injection_flag",
                 payload={
                     "call_id": request.call_id,
+                    "case_id": request.case_id,
                     "flags": [f.model_dump() for f in all_flags],
                 },
             )
@@ -116,6 +117,7 @@ def evaluate_tool_call(
             event_type="policy_check",
             payload={
                 "call_id": request.call_id,
+                "case_id": request.case_id,
                 "reason": decision.reason,
                 "policy_refs": decision.policy_refs,
                 "unsupported_claims": verification.unsupported_claims,
@@ -133,6 +135,7 @@ def evaluate_tool_call(
             event_type="tool_call",
             payload={
                 "call_id": request.call_id,
+                "case_id": request.case_id,
                 "tool_name": request.tool_name,
                 "tool_args": request.tool_args,
                 "decision": decision.decision,

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ._langchain_text import extract_text
 from .client import GuardClient, default_client
 
 try:
@@ -26,7 +27,7 @@ def _last_ai_content(messages: list[Any]) -> str:
         if type(msg).__name__ == "AIMessage":
             content = getattr(msg, "content", None)
             if content:
-                return content if isinstance(content, str) else str(content)
+                return extract_text(content)
     return ""
 
 
@@ -39,7 +40,7 @@ def _recent_tool_contents(messages: list[Any], *, limit: int) -> list[str]:
         if type(msg).__name__ == "ToolMessage":
             content = getattr(msg, "content", None)
             if content:
-                out.append(content if isinstance(content, str) else str(content))
+                out.append(extract_text(content))
         if len(out) >= limit:
             break
     out.reverse()

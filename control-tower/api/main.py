@@ -704,6 +704,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         call_id = body.call_id or str(uuid.uuid4())
+        case_id = f"guard-{call_id}"
         process_kb = _kb_for(process)
         query = " ".join(
             [
@@ -739,6 +740,7 @@ def create_app(
             agent_rationale=body.agent_rationale,
             context_refs=retrieved_ids,
             timestamp=_utc_now(),
+            case_id=case_id,
         )
         decision = evaluate_tool_call(
             request,
@@ -750,7 +752,6 @@ def create_app(
         )
         # Surface SDK / external evaluations on /cases and /traffic/recent so
         # simulated apps show up alongside graph-driven /cases traffic.
-        case_id = f"guard-{call_id}"
         # "escalate" here has no LangGraph thread to resume (unlike /cases) —
         # origin="guard_evaluate" tells the two approval endpoints below
         # (and the dashboard's own POST /approvals/{call_id}) to resolve it
@@ -891,9 +892,22 @@ def create_app(
         for a customer's own system to poll (or later, webhook off of) rather
         than fetching every case and filtering client-side. Approve/reject
         stays POST /approvals/{call_id}, unchanged; this is its GET half.
+
+        Deliberately excludes guard_evaluate-origin escalations: the
+        dashboard can't resolve those (see _authorize_guard_case_resolve —
+        only the owning application's own API key can), and a queue item
+        with Approve/Reject buttons that just 403 when clicked is worse
+        than not listing it here at all. Those stay fully visible via Logs
+        (every retrieval/policy_check/tool_call/approval event, now with
+        case_id on each one) — visibility without implying actionability
+        this page doesn't actually have.
         """
         rows = sorted(
-            (r for r in store.cases.values() if r.get("status") == "pending_approval"),
+            (
+                r
+                for r in store.cases.values()
+                if r.get("status") == "pending_approval" and r.get("origin") != "guard_evaluate"
+            ),
             key=lambda r: str(r.get("created_at") or ""),
             reverse=True,
         )
@@ -915,13 +929,6 @@ def create_app(
                     "policy_refs": gw.get("policy_refs") or [],
                     "source_app": r.get("source_app"),
                     "requested_at": r.get("created_at"),
-                    "origin": r.get("origin") or "graph",
-                    # guard_evaluate escalations are resolved only by their
-                    # owning application's own API key (see
-                    # _authorize_guard_case_resolve) — the dashboard is
-                    # view-only for these; a frontend should disable/hide the
-                    # Approve/Reject buttons on rows where this is false.
-                    "resolvable_from_dashboard": (r.get("origin") or "graph") != "guard_evaluate",
                 }
             )
         return {"approvals": out, "count": len(out)}

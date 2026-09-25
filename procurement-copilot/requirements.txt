@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+langchain>=1.0
+langchain-openai
+python-multipart
+-e ../control-tower/sdk/aiguard[langchain]

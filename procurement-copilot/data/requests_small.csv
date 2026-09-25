@@ -1,0 +1,16 @@
+row_index,vendor_id,amount,item,department,notes
+0,V-1003,290.51,"Printer paper, 20 boxes",facilities,seed:blocked_vendor
+1,V-1009,11552.05,"Independent contractor consulting services, 6-week engagement",engineering,seed:professional_services_needs_sow
+2,V-1010,67.51,Visa gift cards for employee rewards program,marketing,seed:prohibited_gift_cards
+3,V-1009,803.15,Quarterly security audit,engineering,
+4,V-1009,7881.07,Vendor onboarding workshop,engineering,
+5,V-1007,4603.74,Server rack hardware components,it,seed:export_restricted_country
+6,V-1005,5545.91,Laptop docks x10,sales,
+7,V-1001,1608.65,Laptop docks x10,engineering,seed:vendor_compliance_hold
+8,V-1001,585.55,Desk supplies restock,marketing,
+9,V-1004,9329.53,"Warehouse shelving units, phase 1",facilities,seed:split_po_part_1
+10,V-1004,9316.16,"Warehouse shelving units, phase 1",facilities,seed:split_po_part_2
+11,V-1006,3548.53,"Annual SaaS subscription for CRM platform, auto-renews annually, 3-year initial term",it,seed:software_auto_renew
+12,V-1006,1498.79,"Design tool license, monthly",engineering,
+13,V-1006,7780.78,Analytics dashboard seats,marketing,
+14,V-1005,70579.99,Enterprise data center hardware refresh,it,seed:large_capital_equipment

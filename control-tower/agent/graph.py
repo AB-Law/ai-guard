@@ -198,6 +198,7 @@ def build_graph(
             agent_rationale=state.get("agent_rationale") or "",
             context_refs=list(state.get("context_refs") or []),
             timestamp=_utc_now(),
+            case_id=state["case_id"],
         )
         chunk_dicts = list(state.get("chunks") or [])
         texts = [c["text"] for c in chunk_dicts]

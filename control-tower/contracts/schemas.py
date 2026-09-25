@@ -16,6 +16,13 @@ class ToolCallRequest(BaseModel):
     agent_rationale: str
     context_refs: list[str]
     timestamp: str
+    # Optional: the case this call belongs to, if the caller has one (both
+    # /cases and /guard/evaluate do). Threaded through so evaluate_tool_call
+    # can stamp it on every audit entry it writes — without it, Logs shows
+    # "–" for every policy_check/tool_call/injection_flag row regardless of
+    # origin, since those are the only audit.append calls in the codebase
+    # that never had case_id passed to them.
+    case_id: str | None = None
 
 
 GatewayDecisionLiteral = Literal["allow", "block", "escalate"]

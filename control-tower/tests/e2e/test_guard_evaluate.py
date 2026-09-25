@@ -159,6 +159,31 @@ def test_evaluate_writes_to_the_audit_chain(client: TestClient) -> None:
     assert after.json()["valid"] is True
 
 
+def test_evaluate_stamps_case_id_on_every_audit_entry(client: TestClient) -> None:
+    """Regression: evaluate_tool_call's own audit.append calls (policy_check,
+    tool_call) never had case_id in their payload — only call_id — so the
+    Logs page (which reads payload.case_id directly, with no fallback)
+    showed "–" for every row regardless of which integration produced it."""
+    resp = client.post(
+        "/guard/evaluate",
+        json={
+            "process": "procurement_review",
+            "tool_name": "send_payment",
+            "tool_args": {"vendor_id": "V-1001", "amount": 500},
+        },
+    )
+    call_id = resp.json()["call_id"]
+    case_id = f"guard-{call_id}"
+
+    audit = client.get(f"/cases/{case_id}/audit")
+    assert audit.status_code == 200, audit.text
+    entries = audit.json()["entries"]
+    event_types = {e["event_type"] for e in entries}
+    assert {"policy_check", "tool_call"} <= event_types
+    for e in entries:
+        assert e["payload"].get("case_id") == case_id, e
+
+
 def test_call_id_is_generated_when_not_supplied(client: TestClient) -> None:
     resp = client.post(
         "/guard/evaluate",

@@ -206,33 +206,39 @@ def test_demo_reset_endpoint(client_with_sqlite: TestClient) -> None:
 
 
 def test_upload_document_with_collision_renames(
-    client_with_sqlite: TestClient, tmp_path: Path
+    client_with_sqlite: TestClient, project_root: Path
 ) -> None:
     """Test that uploading same filename twice renames the second."""
     content = b"# Test Document\n\nSome content."
     filename = "test_doc.md"
-    
-    # Upload first time
-    resp1 = client_with_sqlite.post(
-        "/knowledge/documents",
-        files={"file": (filename, content, "text/markdown")},
-        data={"process": "procurement_review"},
-    )
-    assert resp1.status_code == 200
-    path1 = resp1.json()["filename"]
-    
-    # Upload again - should get renamed
-    resp2 = client_with_sqlite.post(
-        "/knowledge/documents",
-        files={"file": (filename, content, "text/markdown")},
-        data={"process": "procurement_review"},
-    )
-    assert resp2.status_code == 200
-    path2 = resp2.json()["filename"]
-    
-    # Filenames should be different
-    assert path1 != path2
-    assert "test_doc" in path2
+    uploaded: list[Path] = []
+    try:
+        resp1 = client_with_sqlite.post(
+            "/knowledge/documents",
+            files={"file": (filename, content, "text/markdown")},
+            data={"process": "procurement_review"},
+        )
+        assert resp1.status_code == 200
+        body1 = resp1.json()
+        path1 = body1["filename"]
+        uploaded.append(project_root / body1["path"])
+
+        resp2 = client_with_sqlite.post(
+            "/knowledge/documents",
+            files={"file": (filename, content, "text/markdown")},
+            data={"process": "procurement_review"},
+        )
+        assert resp2.status_code == 200
+        body2 = resp2.json()
+        path2 = body2["filename"]
+        uploaded.append(project_root / body2["path"])
+
+        assert path1 != path2
+        assert "test_doc" in path2
+    finally:
+        for dest in uploaded:
+            if dest.is_file():
+                dest.unlink()
 
 
 def test_create_app_with_env_database_url(

@@ -139,15 +139,22 @@ def test_non_escalated_call_id_is_still_readable_but_not_pending(client: TestCli
     assert resolve.status_code == 409
 
 
-def test_escalated_guard_call_appears_in_dashboard_approvals_list(client: TestClient) -> None:
+def test_escalated_guard_call_is_excluded_from_dashboard_approvals_list(client: TestClient) -> None:
+    """The dashboard can't resolve a guard_evaluate escalation (only the
+    owning application's own API key can — see _authorize_guard_case_resolve),
+    so it must not appear in the Approval queue with Approve/Reject buttons
+    that would just 403. It's still fully visible via Logs instead."""
     call_id = _escalate_a_call(client)
     listing = client.get("/approvals")
     assert listing.status_code == 200
-    rows = listing.json()["approvals"]
-    row = next(r for r in rows if r["call_id"] == call_id)
-    assert row["origin"] == "guard_evaluate"
-    assert row["process"] == "procurement_review"
-    assert row["resolvable_from_dashboard"] is False
+    body = listing.json()
+    assert all(r["call_id"] != call_id for r in body["approvals"])
+    assert body["count"] == 0
+
+    # Confirm it's not silently dropped — it's genuinely pending, just not
+    # listed here.
+    status = client.get(f"/guard/approvals/{call_id}")
+    assert status.json()["status"] == "pending_approval"
 
 
 def test_dashboard_legacy_approve_endpoint_refuses_guard_evaluate_calls(

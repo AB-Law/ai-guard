@@ -89,10 +89,17 @@ def test_sqlite_tier_shares_case_and_hitl_state_across_processes(
     )
     # data/cases.db and data/checkpoints.db are created under project_root by
     # design (same directory as data/audit.db) — clean up what this test made.
+    # Best-effort: on Windows a just-closed sqlite/checkpointer connection can
+    # still hold the file briefly (or another local process, e.g. a --reload
+    # dev server, may have it open) — that's an OS/environment timing issue,
+    # not a sign the persistence behavior just asserted above is wrong.
     for name in ("cases.db", "checkpoints.db"):
         p = project_root / "data" / name
-        if p.exists():
-            p.unlink()
+        try:
+            if p.exists():
+                p.unlink()
+        except PermissionError:
+            pass
 
 
 def test_default_tier_is_in_memory_only_per_process(

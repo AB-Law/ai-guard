@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Procurement Copilot</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #121821;
+    --panel-2: #171f2b;
+    --border: #232c3a;
+    --text: #e6ecf3;
+    --muted: #8492a6;
+    --accent: #5fb3ff;
+    --good: #3ecf8e;
+    --warn: #f2b84b;
+    --bad: #ef6a6a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+  }
+  header {
+    padding: 14px 22px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: 0.3px; }
+  header span { color: var(--muted); font-size: 12px; }
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 360px;
+    height: calc(100vh - 49px);
+  }
+  .main { display: flex; flex-direction: column; border-right: 1px solid var(--border); min-width: 0; min-height: 0; }
+  .toolbar {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    background: var(--panel);
+  }
+  .toolbar .spacer { flex: 1; }
+  button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 600; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  input[type="file"] { font-size: 12px; color: var(--muted); max-width: 180px; }
+  .badge { font-size: 11px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .transcript { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column; gap: 6px; }
+  .row-block { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--panel); margin-bottom: 4px; }
+  .row-head { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .row-head .status { font-weight: 700; text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.4px; padding: 2px 8px; border-radius: 999px; }
+  .status.allowed { color: var(--good); background: rgba(62,207,142,0.12); }
+  .status.escalated { color: var(--warn); background: rgba(242,184,75,0.12); }
+  .status.blocked { color: var(--bad); background: rgba(239,106,106,0.12); }
+  .status.no_action { color: var(--muted); background: rgba(132,146,166,0.12); }
+  .line { font-size: 12.5px; line-height: 1.45; margin: 3px 0; }
+  .line.ai { color: var(--text); }
+  .line.tool { color: var(--accent); font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
+  .line.result { color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
+  .line.decision { font-weight: 600; }
+  .line.decision.block { color: var(--bad); }
+  .line.decision.escalate { color: var(--warn); }
+  .chatbar { display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border); background: var(--panel); }
+  .chatbar input { flex: 1; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; color: var(--text); font-size: 12.5px; }
+  .side { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; background: var(--panel); }
+  .side section { border-bottom: 1px solid var(--border); padding: 12px 16px; }
+  .side h2 { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin: 0 0 10px; }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+  .stat .n { font-size: 18px; font-weight: 700; }
+  .stat .l { font-size: 10.5px; color: var(--muted); }
+  .pending-card { background: var(--panel-2); border: 1px solid var(--warn); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+  .pending-card .r { font-size: 12px; margin-bottom: 6px; }
+  .pending-card .meta { font-size: 10.5px; color: var(--muted); margin-bottom: 8px; }
+  .pending-card .actions { display: flex; gap: 6px; }
+  .pending-card .actions button { flex: 1; }
+  .approve { background: var(--good); border-color: var(--good); color: #04231a; font-weight: 600; }
+  .reject { background: var(--bad); border-color: var(--bad); color: #2a0808; font-weight: 600; }
+  .empty { color: var(--muted); font-size: 12px; }
+  .inline-approval { margin-top: 8px; border: 1px solid var(--warn); border-radius: 8px; padding: 10px; background: rgba(242,184,75,0.06); }
+  .inline-approval .scores { display: flex; gap: 14px; font-size: 10.5px; color: var(--muted); margin-bottom: 8px; }
+  .inline-approval .scores b { color: var(--text); }
+  .inline-approval .actions { display: flex; gap: 8px; }
+  .inline-approval .actions button { flex: 1; }
+  .inline-approval .resolved { font-size: 12px; font-weight: 600; }
+  .inline-approval .resolved.approve { color: var(--good); background: none; border: none; padding: 0; }
+  .inline-approval .resolved.reject { color: var(--bad); background: none; border: none; padding: 0; }
+  .progress-wrap { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+  .progress-bar { width: 120px; height: 5px; border-radius: 999px; background: var(--panel-2); overflow: hidden; border: 1px solid var(--border); }
+  .progress-bar .fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.2s; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Procurement Copilot</h1>
+  <span>standalone app &middot; governed by Aegis via the aiguard SDK</span>
+</header>
+<div class="layout">
+  <div class="main">
+    <div class="toolbar">
+      <input type="file" id="fileInput" accept=".csv" />
+      <button id="loadBtn">Load CSV</button>
+      <span class="badge" id="rowCount">0 rows loaded</span>
+      <button id="startBtn" class="primary" disabled>Start processing</button>
+      <button id="stopBtn" disabled>Stop</button>
+      <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;">
+        concurrency
+        <select id="concurrency" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:11px;">
+          <option value="1">1 (strict order)</option>
+          <option value="4" selected>4</option>
+          <option value="8">8</option>
+        </select>
+      </label>
+      <div class="spacer"></div>
+      <div class="progress-wrap">
+        <span id="progress"></span>
+        <div class="progress-bar"><div class="fill" id="progressFill"></div></div>
+      </div>
+    </div>
+    <div class="transcript" id="transcript">
+      <div class="empty">Load a CSV (generate one with backend/generate_requests.py) and click Start, or just type a message below.</div>
+    </div>
+    <div class="chatbar">
+      <input id="chatInput" placeholder="Type a message to the agent (e.g. try a prompt injection)..." />
+      <button id="chatBtn" class="primary">Send</button>
+    </div>
+  </div>
+  <div class="side">
+    <section>
+      <h2>Pending approval</h2>
+      <div id="pendingList" class="empty">Nothing pending.</div>
+    </section>
+    <section>
+      <h2>Activity</h2>
+      <div class="stat-grid" id="stats"></div>
+    </section>
+  </div>
+</div>
+<script>
+const transcript = document.getElementById('transcript');
+const pendingList = document.getElementById('pendingList');
+const statsEl = document.getElementById('stats');
+const rowCountEl = document.getElementById('rowCount');
+const progressEl = document.getElementById('progress');
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+
+let rows = [];
+let stopRequested = false;
+let processedCount = 0;
+let totalToProcess = 0;
+
+// call_id -> the inline approval card's DOM node, so resolving from either
+// the sidebar or the inline card updates both instead of only one of them.
+const inlineApprovalNodes = new Map();
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function clearEmpty(container) {
+  const empty = container.querySelector('.empty');
+  if (empty) empty.remove();
+}
+
+function isNearBottom(container) {
+  return container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+}
+
+function buildInlineApproval(p) {
+  const wrap = el('div', 'inline-approval');
+  const scores = el('div', 'scores');
+  scores.innerHTML = `risk <b>${p.risk_score}</b> &nbsp; confidence <b>${p.confidence_score}</b> &nbsp; evidence <b>${p.evidence_score}</b>`;
+  wrap.appendChild(scores);
+  if (p.rationale) wrap.appendChild(el('div', 'line ai', p.rationale));
+  wrap.appendChild(el('div', 'line', p.reason || ''));
+  const actions = el('div', 'actions');
+  const approveBtn = el('button', 'approve', 'Approve');
+  const rejectBtn = el('button', 'reject', 'Reject');
+  approveBtn.onclick = () => resolvePending(p.call_id, 'approve');
+  rejectBtn.onclick = () => resolvePending(p.call_id, 'reject');
+  actions.appendChild(approveBtn);
+  actions.appendChild(rejectBtn);
+  wrap.appendChild(actions);
+  inlineApprovalNodes.set(p.call_id, { wrap, actions, approveBtn, rejectBtn });
+  return wrap;
+}
+
+function markResolvedInline(callId, action) {
+  const node = inlineApprovalNodes.get(callId);
+  if (!node) return;
+  node.actions.replaceWith(el('div', 'resolved ' + action, action === 'approve' ? '✓ Approved' : '✕ Rejected'));
+}
+
+function renderSummary(summary, label) {
+  clearEmpty(transcript);
+  const wasNearBottom = isNearBottom(transcript);
+  const block = el('div', 'row-block');
+  const head = el('div', 'row-head');
+  head.appendChild(el('span', null, label));
+  head.appendChild(el('span', 'status ' + summary.status, summary.status.replace('_', ' ')));
+  block.appendChild(head);
+  for (const item of summary.transcript) {
+    if (item.type === 'ai_text') {
+      block.appendChild(el('div', 'line ai', item.content));
+    } else if (item.type === 'tool_call') {
+      block.appendChild(el('div', 'line tool', `→ ${item.tool_name}(${JSON.stringify(item.args)})`));
+    } else if (item.type === 'tool_result') {
+      block.appendChild(el('div', 'line result', `✓ ${item.content}`));
+    } else if (item.type === 'aiguard_decision') {
+      const d = el('div', 'line decision ' + item.decision,
+        `⛭ aegis: ${item.decision.toUpperCase()} — ${item.reason} (risk ${item.risk_score}, evidence ${item.evidence_score})`);
+      block.appendChild(d);
+      if (item.decision === 'escalate' && summary.pending && summary.pending.tool_call_id === item.tool_call_id) {
+        block.appendChild(buildInlineApproval(summary.pending));
+      }
+    }
+  }
+  transcript.appendChild(block);
+  if (wasNearBottom) transcript.scrollTop = transcript.scrollHeight;
+}
+
+function renderPendingCard(p) {
+  const card = el('div', 'pending-card');
+  const rowDesc = p.row ? `${p.row.vendor_id} · $${p.row.amount} · ${p.row.item}` : (p.tool_name + '(' + JSON.stringify(p.tool_args) + ')');
+  card.appendChild(el('div', 'r', rowDesc));
+  if (p.rationale) card.appendChild(el('div', 'meta', p.rationale));
+  card.appendChild(el('div', 'meta', p.reason || ''));
+  card.appendChild(el('div', 'meta', `risk ${p.risk_score} · confidence ${p.confidence_score} · evidence ${p.evidence_score}`));
+  const actions = el('div', 'actions');
+  const approveBtn = el('button', 'approve', 'Approve');
+  const rejectBtn = el('button', 'reject', 'Reject');
+  approveBtn.onclick = () => resolvePending(p.call_id, 'approve');
+  rejectBtn.onclick = () => resolvePending(p.call_id, 'reject');
+  actions.appendChild(approveBtn);
+  actions.appendChild(rejectBtn);
+  card.appendChild(actions);
+  return card;
+}
+
+async function refreshPending() {
+  const res = await fetch('/pending');
+  const data = await res.json();
+  pendingList.innerHTML = '';
+  if (!data.pending.length) {
+    pendingList.appendChild(el('div', 'empty', 'Nothing pending.'));
+    return;
+  }
+  for (const p of data.pending) {
+    pendingList.appendChild(renderPendingCard(p));
+  }
+}
+
+async function resolvePending(callId, action) {
+  await fetch(`/pending/${callId}/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, actor: 'demo-user' }),
+  });
+  markResolvedInline(callId, action);
+  await refreshPending();
+  await refreshStats();
+}
+
+async function refreshStats() {
+  const res = await fetch('/state');
+  const s = await res.json();
+  statsEl.innerHTML = '';
+  const tiles = [
+    ['Purchase orders', s.purchase_orders.length],
+    ['Approval requests', s.approval_requests.length],
+    ['Fraud flags', s.fraud_flags.length],
+    ['Doc requests', s.documentation_requests.length],
+    ['Trade compliance', s.compliance_escalations.length],
+    ['Rejections', s.rejections.length],
+  ];
+  for (const [label, n] of tiles) {
+    const stat = el('div', 'stat');
+    stat.appendChild(el('div', 'n', String(n)));
+    stat.appendChild(el('div', 'l', label));
+    statsEl.appendChild(stat);
+  }
+}
+
+document.getElementById('loadBtn').onclick = async () => {
+  const file = document.getElementById('fileInput').files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch('/upload', { method: 'POST', body: form });
+  const data = await res.json();
+  rows = data.rows;
+  rowCountEl.textContent = `${rows.length} rows loaded`;
+  startBtn.disabled = rows.length === 0;
+};
+
+function updateProgress() {
+  progressEl.textContent = `${processedCount} / ${totalToProcess} processed`;
+  const pct = totalToProcess ? Math.round((processedCount / totalToProcess) * 100) : 0;
+  document.getElementById('progressFill').style.width = pct + '%';
+}
+
+async function processOneRow(row, i) {
+  const res = await fetch('/rows/process', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(row),
+  });
+  const summary = await res.json();
+  renderSummary(summary, `Row ${i + 1}: ${row.vendor_id} · $${row.amount} · ${row.item}`);
+  await refreshPending();
+  await refreshStats();
+  processedCount += 1;
+  updateProgress();
+}
+
+// Same (vendor_id, item) pair — e.g. the demo's split-PO scenario — must
+// run in order: the second row's lookup_vendor(recent_orders) needs to see
+// the first row's PO, which only exists once that request has actually
+// completed. Everything else can run concurrently.
+function rowKey(row) {
+  return row.vendor_id + '::' + row.item;
+}
+
+async function processAllRows(allRows, concurrency) {
+  let nextIndex = 0;
+  const lastPromiseForKey = new Map();
+
+  async function worker() {
+    while (nextIndex < allRows.length) {
+      if (stopRequested) return;
+      const i = nextIndex++;
+      const row = allRows[i];
+      const key = rowKey(row);
+      const waitFor = lastPromiseForKey.get(key);
+      const task = (async () => {
+        if (waitFor) await waitFor;
+        if (stopRequested) return;
+        await processOneRow(row, i);
+      })();
+      lastPromiseForKey.set(key, task);
+      await task;
+    }
+  }
+
+  const n = Math.max(1, Math.min(concurrency, allRows.length));
+  await Promise.all(Array.from({ length: n }, () => worker()));
+}
+
+startBtn.onclick = async () => {
+  stopRequested = false;
+  processedCount = 0;
+  totalToProcess = rows.length;
+  updateProgress();
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+  const concurrency = parseInt(document.getElementById('concurrency').value, 10);
+  await processAllRows(rows, concurrency);
+  progressEl.textContent = (stopRequested ? 'stopped at ' : 'done — ') + `${processedCount} / ${totalToProcess} processed`;
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+};
+
+stopBtn.onclick = () => { stopRequested = true; };
+
+document.getElementById('chatBtn').onclick = async () => {
+  const input = document.getElementById('chatInput');
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = '';
+  const res = await fetch('/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  });
+  const summary = await res.json();
+  renderSummary(summary, 'You: ' + message);
+  await refreshPending();
+  await refreshStats();
+};
+document.getElementById('chatInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('chatBtn').click();
+});
+
+refreshPending();
+refreshStats();
+</script>
+</body>
+</html>

@@ -121,6 +121,36 @@ def test_rationale_is_the_most_recent_ai_message_no_buffering_needed() -> None:
     assert kwargs["agent_rationale"] == "Vendor is active, amount is fine, approving."
 
 
+def test_rationale_extracts_text_blocks_from_reasoning_model_content() -> None:
+    """Reasoning-style models (langchain-openai's Responses-API output,
+    o-series, etc.) give AIMessage.content as a list of typed blocks, not a
+    plain string. The rationale sent to the tower must be the human-readable
+    text, not a str() of the raw block list (which would leak internal
+    fields like encrypted_content and dilute/garble the groundedness
+    signal)."""
+    client = _client_returning("allow")
+    middleware = AiGuardMiddleware(client=client)
+    request = _request(
+        messages=[
+            HumanMessage("buy stuff"),
+            AIMessage(
+                content=[
+                    {"type": "reasoning", "content": [], "encrypted_content": "gAAAAA...=="},
+                    {"type": "text", "text": "Vendor is active, amount is fine, approving."},
+                    {"type": "function_call", "name": "create_purchase_order", "arguments": "{}"},
+                ]
+            ),
+        ],
+        tool_call={"name": "create_purchase_order", "args": {"vendor_id": "V-1001"}, "id": "t1"},
+    )
+
+    middleware.wrap_tool_call(request, MagicMock(return_value="ok"))
+
+    kwargs = client.evaluate.call_args.kwargs
+    assert kwargs["agent_rationale"] == "Vendor is active, amount is fine, approving."
+    assert "encrypted_content" not in kwargs["agent_rationale"]
+
+
 def test_context_comes_from_recent_tool_messages() -> None:
     client = _client_returning("allow")
     middleware = AiGuardMiddleware(client=client)

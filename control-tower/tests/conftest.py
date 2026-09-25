@@ -60,3 +60,19 @@ def _test_auth_mode(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPa
         monkeypatch.setenv("DASHBOARD_PASSWORD", "")
     else:
         monkeypatch.delenv("AEGIS_DISABLE_AUTH", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same leak as _isolate_openai_key above, different variable: this
+    repo's own .env can set DATABASE_URL=sqlite for local dev persistence,
+    and create_app()'s `database_url if database_url is not None else
+    os.environ.get("DATABASE_URL")` fallback means even a test that passes
+    database_url=None *explicitly* (to test default in-memory behavior)
+    still picks up the leaked env value — silently switching it onto the
+    sqlite tier, which then reads/writes the same real data/*.db files
+    every other test sharing that tier also touches, corrupting counts and
+    isolation across the whole suite. Tests that want a real persisted tier
+    pass an explicit non-None database_url ("sqlite" or a postgres URL),
+    which always wins over this regardless."""
+    monkeypatch.setenv("DATABASE_URL", "")

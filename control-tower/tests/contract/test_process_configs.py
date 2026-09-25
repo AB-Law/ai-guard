@@ -6,7 +6,17 @@ from configs.loader import known_processes, load_process
 
 _EXPECTED = {
     "procurement_review": {
-        "allowed": {"create_purchase_order", "request_approval"},
+        "allowed": {
+            "create_purchase_order",
+            "request_approval",
+            # Added for the standalone procurement-copilot app's tool set
+            # (see configs/procurement_review.yaml) — none move money, so
+            # no max_auto_amount entry.
+            "flag_duplicate_or_split_po",
+            "request_documentation",
+            "escalate_to_trade_compliance",
+            "reject_request",
+        },
         "disallowed": {"send_payment", "modify_vendor_banking_details"},
         "threshold": 60,
         "max_auto": {"create_purchase_order": 10000.0},

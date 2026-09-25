@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from ._langchain_text import extract_text
 from .client import GuardClient, default_client
 from .exceptions import AiGuardBlocked, AiGuardEscalated
 
@@ -80,7 +81,7 @@ class AiGuardCallbackHandler(BaseCallbackHandler):
             return
         content = getattr(message, "content", None)
         if content:
-            self._last_rationale = content if isinstance(content, str) else str(content)
+            self._last_rationale = extract_text(content)
 
     def on_retriever_end(
         self,

@@ -85,6 +85,26 @@ def test_rationale_is_captured_from_llm_end_with_no_caller_action() -> None:
     assert kwargs["agent_rationale"] == "Vendor V-1001 is active and the amount is under the threshold."
 
 
+def test_rationale_extracts_text_blocks_from_reasoning_model_content() -> None:
+    """Same fix as the middleware: a reasoning-style model's AIMessage.content
+    is a list of typed blocks, not a plain string — must extract the "text"
+    block, not str() the whole list."""
+    handler, client = _handler_returning("allow")
+    handler.on_llm_end(
+        _llm_result(
+            [
+                {"type": "reasoning", "content": [], "encrypted_content": "gAAAAA...=="},
+                {"type": "text", "text": "Vendor V-1001 is active and the amount is under the threshold."},
+            ]
+        ),
+        run_id="r1",
+    )
+    create_purchase_order.run({"vendor_id": "V-1001", "amount": 2500}, callbacks=[handler])
+    kwargs = client.evaluate.call_args.kwargs
+    assert kwargs["agent_rationale"] == "Vendor V-1001 is active and the amount is under the threshold."
+    assert "encrypted_content" not in kwargs["agent_rationale"]
+
+
 def test_context_is_captured_from_retriever_end_with_no_caller_action() -> None:
     handler, client = _handler_returning("allow")
     docs = [
