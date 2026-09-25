@@ -398,23 +398,31 @@ def test_rule_store_activate_reject_error_paths(rule_db: LearnedRuleStore) -> No
 def test_rule_store_active_cap(rule_db: LearnedRuleStore) -> None:
     from guardrails.rule_store import MAX_ACTIVE_PER_PROCESS
 
-    with patch.object(rule_db, "count_by_status", side_effect=lambda _p, status: (
-        MAX_ACTIVE_PER_PROCESS if status == "active" else 0
-    )):
-        with pytest.raises(ValueError, match="active rule cap"):
-            rule_db.create_pending(
-                process_id="onboarding_kyc",
-                rule_text="cap check phrase one",
-                source_incident_id="inc-cap",
-            )
+    with (
+        patch.object(
+            rule_db,
+            "count_by_status",
+            side_effect=lambda _p, status: (
+                MAX_ACTIVE_PER_PROCESS if status == "active" else 0
+            ),
+        ),
+        pytest.raises(ValueError, match="active rule cap"),
+    ):
+        rule_db.create_pending(
+            process_id="onboarding_kyc",
+            rule_text="cap check phrase one",
+            source_incident_id="inc-cap",
+        )
     pending = rule_db.create_pending(
         process_id="onboarding_kyc",
         rule_text="cap check phrase two",
         source_incident_id="inc-cap2",
     )
-    with patch.object(rule_db, "count_by_status", return_value=MAX_ACTIVE_PER_PROCESS):
-        with pytest.raises(ValueError, match="active rule cap"):
-            rule_db.activate(pending.rule_id, approved_by="ops@aegis.dev")
+    with (
+        patch.object(rule_db, "count_by_status", return_value=MAX_ACTIVE_PER_PROCESS),
+        pytest.raises(ValueError, match="active rule cap"),
+    ):
+        rule_db.activate(pending.rule_id, approved_by="ops@aegis.dev")
 
 
 def test_policy_learning_llm_path_and_error_audit(
