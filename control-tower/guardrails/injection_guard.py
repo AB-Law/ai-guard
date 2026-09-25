@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 from re import Pattern
 
@@ -12,6 +11,7 @@ from contracts.schemas import (
     InjectionScanResult,
     InjectionSeverity,
 )
+from guardrails.verification_mode import PathMode, injection_path
 
 _SNIPPET_MAX = 120
 _LLM_TEXT_MAX = 2000
@@ -192,13 +192,18 @@ def scan(
         return InjectionScanResult(flags=learned_flags, trust="untrusted")
 
     regex_flags = _scan_regex(texts)
-    if _has_high(regex_flags):
+    path = injection_path(
+        has_learned=False,
+        has_high_regex=_has_high(regex_flags),
+    )
+    if path is PathMode.HEURISTIC:
         return InjectionScanResult(flags=regex_flags, trust="untrusted")
 
-    if not os.environ.get("OPENAI_API_KEY", "").strip():
+    try:
+        classified = _llm_classify(texts)
+    except Exception:  # noqa: BLE001 — fail open: keep regex flags, do not crash caller
         return InjectionScanResult(flags=regex_flags, trust="untrusted")
 
-    classified = _llm_classify(texts)
     flags = list(regex_flags)
     if classified.is_injection:
         flags.append(_classifier_to_flag(classified, texts))
