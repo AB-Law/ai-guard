@@ -155,10 +155,11 @@ def _classifier_to_flag(result: InjectionClassifierResult, texts: list[str]) -> 
     if attack == "none":
         attack = "semantic_injection"
     pattern_id = f"llm:{attack}"
+    # Prefer the offending chunk text — not the classifier rationale — so
+    # policy-learning can propose a literal fingerprint that matches replays.
     snippet_src = next((t for t in texts if t.strip()), "")
     snippet = _truncate_for_llm(snippet_src)[:_SNIPPET_MAX]
-    if result.rationale:
-        # Prefer a short rationale snippet when available for audit readability.
+    if not snippet and result.rationale:
         rational_snip = result.rationale.replace("\n", " ").strip()
         if len(rational_snip) > _SNIPPET_MAX:
             rational_snip = rational_snip[: _SNIPPET_MAX - 3] + "..."
