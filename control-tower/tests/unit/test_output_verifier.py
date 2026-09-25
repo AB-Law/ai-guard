@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -113,14 +113,16 @@ def test_verify_evidence_fail_closed_when_judge_returns_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Empty structured output raises inside _llm_judge; verify_evidence fails closed."""
+    from guardrails.llm import reset_chat_openai_cache
+
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    reset_chat_openai_cache()
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value.invoke.return_value = None
     with (
-        patch("langchain_openai.ChatOpenAI") as mock_chat_cls,
+        patch("guardrails.llm.get_chat_openai", return_value=mock_llm),
         patch("guardrails.output_verifier.verify") as mock_verify,
     ):
-        mock_chat_cls.return_value.with_structured_output.return_value.invoke.return_value = (
-            None
-        )
         result = verify_evidence("some rationale", ["some chunk"])
     mock_verify.assert_not_called()
     assert result.evidence_score == 0.0
@@ -173,24 +175,27 @@ def test_llm_judge_does_not_short_circuit_when_only_request_facts_are_present() 
     call the judge instead of auto-failing — a claim might be fully covered
     by the request's own args (e.g. process=onboarding_kyc has no retrieved
     docs but the request itself may still ground simple claims)."""
+    from guardrails.llm import reset_chat_openai_cache
     from guardrails.output_verifier import _llm_judge
 
+    reset_chat_openai_cache()
     fake_result = VerificationResult(evidence_score=1.0, unsupported_claims=[])
-    with patch("langchain_openai.ChatOpenAI") as mock_chat_cls:
-        mock_chat_cls.return_value.with_structured_output.return_value.invoke.return_value = (
-            fake_result
-        )
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value.invoke.return_value = fake_result
+    with patch("guardrails.llm.get_chat_openai", return_value=mock_llm) as mock_get:
         with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-not-real"}):
             result = _llm_judge(
                 "The amount is 2500.", [], request_facts={"vendor_id": "V-1001", "amount": 2500}
             )
-    mock_chat_cls.assert_called_once()
+    mock_get.assert_called_once()
     assert result.evidence_score == 1.0
 
 
 def test_llm_judge_prompt_includes_request_facts() -> None:
+    from guardrails.llm import reset_chat_openai_cache
     from guardrails.output_verifier import _llm_judge
 
+    reset_chat_openai_cache()
     fake_result = VerificationResult(evidence_score=1.0, unsupported_claims=[])
     captured_prompt = {}
 
@@ -198,10 +203,9 @@ def test_llm_judge_prompt_includes_request_facts() -> None:
         captured_prompt["value"] = prompt
         return fake_result
 
-    with patch("langchain_openai.ChatOpenAI") as mock_chat_cls:
-        mock_chat_cls.return_value.with_structured_output.return_value.invoke.side_effect = (
-            _capture_invoke
-        )
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value.invoke.side_effect = _capture_invoke
+    with patch("guardrails.llm.get_chat_openai", return_value=mock_llm):
         with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-not-real"}):
             _llm_judge(
                 "The amount is 2500.",
