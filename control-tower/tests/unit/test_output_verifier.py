@@ -218,3 +218,61 @@ def test_llm_judge_prompt_includes_request_facts() -> None:
         )
     assert "vendor_id=V-1001" in captured_prompt["value"]
     assert "amount=2500" in captured_prompt["value"]
+
+
+def test_vacuous_rationale_scores_zero() -> None:
+    """Content-free approval language has nothing to ground — score 0."""
+    chunks = [
+        ("Purchase orders at or below USD 10,000 may be auto-approved when the "
+        "vendor is active on the vendor master list.")
+    ]
+    result = verify("Approving this.", chunks)
+    assert result.evidence_score == 0.0
+    assert result.unsupported_claims
+
+
+def test_distant_paraphrase_under_limit_grounded() -> None:
+    """Heuristic should accept distant but faithful paraphrases of policy."""
+    chunk = (
+        "Purchase orders at or below USD 10,000 may be auto-approved when the "
+        "vendor is active on the vendor master list."
+    )
+    rationale = (
+        "This order sits well under the ten-thousand-dollar auto-approve "
+        "ceiling, so it clears the spend band."
+    )
+    result = verify(rationale, [chunk], request_facts={"vendor_id": "V-1001", "amount": 2500})
+    assert result.evidence_score >= 0.5
+
+
+def test_heuristic_eval_f1_regression() -> None:
+    """CI gate: offline heuristic F1(ungrounded) vs labeled fixture ≥ 0.85."""
+    from pathlib import Path
+
+    from scripts.eval_output_verifier import (
+        binary_metrics,
+        load_cases,
+        score_to_label,
+    )
+
+    fixture = (
+        Path(__file__).resolve().parents[1] / "fixtures" / "output_verifier_eval.jsonl"
+    )
+    cases = load_cases(fixture)
+    assert 30 <= len(cases) <= 50, f"expected 30-50 cases, got {len(cases)}"
+
+    labels = [c["expected"] for c in cases]
+    preds: list[str] = []
+    for case in cases:
+        result = verify(
+            case["rationale"],
+            case.get("context_chunks") or [],
+            request_facts=case.get("request_facts"),
+        )
+        preds.append(score_to_label(result.evidence_score))
+
+    metrics = binary_metrics(labels, preds)
+    assert metrics.f1 >= 0.85, (
+        f"heuristic F1 {metrics.f1:.3f} < 0.85 "
+        f"(P={metrics.precision:.3f} R={metrics.recall:.3f})"
+    )

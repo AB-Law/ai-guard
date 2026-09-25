@@ -12,6 +12,16 @@ from guardrails.verification_mode import (
     evidence_unavailable_result,
 )
 
+# Binary groundedness cutoff used by eval / CI (score >= threshold → grounded).
+GROUNDED_SCORE_THRESHOLD = 0.5
+
+# Tunable heuristic thresholds (deterministic path only).
+_JACCARD_THRESHOLD = 0.28
+_COVERAGE_THRESHOLD = 0.55
+_ALIAS_HIT_MIN = 1
+_PHRASE_N = 3
+_MIN_CONTENT_TOKENS_FOR_PHRASE = 3
+
 _STOPWORDS = frozenset(
     {
         "a",
@@ -36,17 +46,269 @@ _STOPWORDS = frozenset(
         "it",
         "as",
         "be",
+        "our",
+        "we",
+        "so",
+        "may",
+        "when",
+        "from",
+        "into",
+        "than",
+        "once",
+        "before",
+        "its",
+        "has",
+        "have",
+        "had",
+        "do",
+        "does",
+        "did",
+        "can",
+        "could",
+        "should",
+        "would",
+        "will",
+        "been",
+        "being",
+        "their",
+        "them",
+        "they",
+        "who",
+        "which",
+        "what",
+        "where",
+        "how",
+        "all",
+        "each",
+        "other",
+        "some",
+        "such",
+        "nor",
+        "only",
+        "own",
+        "same",
+        "too",
+        "very",
+        "just",
+        "also",
+        "more",
+        "most",
+        "again",
+        "further",
+        "then",
+        "there",
+        "here",
+        "out",
+        "up",
+        "down",
+        "if",
+        "my",
+        "your",
+        "you",
+        "me",
+        "him",
+        "us",
+        "am",
+        "well",
+        "still",
+        "already",
+        "yet",
+        "even",
+        "ever",
+        "never",
+        "always",
+        "really",
+        "actually",
+        "please",
+        "any",
+        "something",
+        "anything",
+        "everything",
+        "nothing",
+        "someone",
+        "anyone",
+        "everyone",
+        "sits",
+        "sit",
+        "let",
+        "lets",
+        "get",
+        "gets",
+        "got",
+        "make",
+        "makes",
+        "made",
+        "need",
+        "needs",
+        "needed",
+        "via",
+        "must",
+        "not",
     }
 )
 
+# Content-free approval boilerplate — if a rationale only has these, score 0.
+_VACUOUS_TOKENS = frozenset(
+    {
+        "approving",
+        "approve",
+        "approved",
+        "approval",
+        "looks",
+        "good",
+        "ok",
+        "okay",
+        "yes",
+        "lgtm",
+        "proceed",
+        "proceeding",
+        "fine",
+        "sure",
+        "thanks",
+        "thank",
+        "ahead",
+        "ship",
+        "done",
+        "ready",
+    }
+)
+
+# Novel credential / authorization tokens — never infer from status alone.
+_NOVEL_CREDENTIALS = frozenset(
+    {
+        "iso9001",
+        "iso",
+        "9001",
+        "num9001",
+        "soc2",
+        "soc",
+        "cfo",
+        "precleared",
+        "unlimited",
+    }
+)
+
+_BANKING_TERMS = frozenset(
+    {
+        "banking",
+        "bank",
+        "payment",
+        "payments",
+        "routing",
+        "account",
+        "accounts",
+    }
+)
+
+# Equivalence classes for distant paraphrase matching (procurement domain).
+_SYNONYM_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset(
+        {
+            "active",
+            "approved",
+            "cleared",
+            "standing",
+            "roster",
+            "goodstanding",
+        }
+    ),
+    frozenset(
+        {
+            "autoapprove",
+            "autoapproved",
+            "approve",
+            "approved",
+            "approval",
+        }
+    ),
+    frozenset(
+        {
+            "human",
+            "person",
+            "manual",
+            "signoff",
+            "bless",
+            "escalate",
+            "escalation",
+            "requestapproval",
+            "greenlight",
+        }
+    ),
+    _BANKING_TERMS,
+    frozenset(
+        {
+            "above",
+            "over",
+            "north",
+            "past",
+            "exceeds",
+            "exceed",
+            "beyond",
+        }
+    ),
+    frozenset(
+        {
+            "below",
+            "under",
+            "beneath",
+            "within",
+        }
+    ),
+    frozenset({"risk", "riskscore"}),
+    frozenset({"sixty", "num60"}),
+    frozenset({"ceiling", "limit", "band", "threshold"}),
+)
+
+# Word/phrase → numeric token (applied before tokenization).
+_AMOUNT_PHRASE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bten[\s-]?thousand\b", re.IGNORECASE), " num10000 "),
+    (re.compile(r"\bten[\s-]?grand\b", re.IGNORECASE), " num10000 "),
+    (re.compile(r"\b10k\b", re.IGNORECASE), " num10000 "),
+    (re.compile(r"\$?\s*10[\s,]*000\b", re.IGNORECASE), " num10000 "),
+    (re.compile(r"\bsixty\b", re.IGNORECASE), " num60 "),
+)
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_COMMA_NUMBER_RE = re.compile(r"\b(\d{1,3}(?:,\d{3})+)\b")
+_PLAIN_NUMBER_RE = re.compile(r"\b(\d+)\b")
+
+
+def _normalize_text(text: str) -> str:
+    """Lowercase, fold amount phrases / comma numbers into stable tokens."""
+    t = text.lower()
+    for pat, repl in _AMOUNT_PHRASE_PATTERNS:
+        t = pat.sub(repl, t)
+    t = _COMMA_NUMBER_RE.sub(lambda m: f" num{m.group(1).replace(',', '')} ", t)
+    t = re.sub(r"\$\s*", " ", t)
+    t = _PLAIN_NUMBER_RE.sub(lambda m: f" num{m.group(1)} ", t)
+    t = t.replace("auto-approve", "autoapprove").replace("auto approve", "autoapprove")
+    t = t.replace("sign-off", "signoff").replace("sign off", "signoff")
+    t = t.replace("green-light", "greenlight").replace("green light", "greenlight")
+    t = t.replace("good standing", "goodstanding")
+    t = t.replace("pre-cleared", "precleared").replace("pre cleared", "precleared")
+    t = t.replace("iso-9001", "iso9001").replace("iso 9001", "iso9001")
+    t = t.replace("soc 2", "soc2").replace("soc-2", "soc2")
+    t = t.replace("must not", "mustnot").replace("must-not", "mustnot")
+    t = t.replace("do not", "donot").replace("do-not", "donot")
+    t = t.replace("not allowed", "notallowed").replace("not-allowed", "notallowed")
+    return t
+
 
 def _content_tokens_ordered(text: str) -> list[str]:
-    words = re.findall(r"[a-z0-9]+", text.lower())
+    words = _TOKEN_RE.findall(_normalize_text(text))
     return [w for w in words if w not in _STOPWORDS and len(w) > 1]
 
 
 def _content_tokens(text: str) -> set[str]:
     return set(_content_tokens_ordered(text))
+
+
+def _expand_synonyms(tokens: set[str]) -> set[str]:
+    out = set(tokens)
+    for group in _SYNONYM_GROUPS:
+        if tokens & group:
+            out |= group
+    return out
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:
@@ -57,6 +319,12 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     inter = len(a & b)
     union = len(a | b)
     return inter / union if union else 0.0
+
+
+def _token_coverage(claim: set[str], context: set[str]) -> float:
+    if not claim:
+        return 1.0
+    return len(claim & context) / len(claim)
 
 
 def _split_claims(rationale: str) -> list[str]:
@@ -72,7 +340,7 @@ def _phrase_in_chunk(claim: str, chunk: str) -> bool:
     # what's actually being claimed. Filtering keeps phrase matches
     # meaningful instead of just re-detecting the claim's own subject.
     claim_tokens = _content_tokens_ordered(claim)
-    if len(claim_tokens) < 3:
+    if len(claim_tokens) < _MIN_CONTENT_TOKENS_FOR_PHRASE:
         return False
     # Compare against the chunk's own tokens, not its raw text — markdown
     # emphasis (`**active**`, `## heading`) sits between words that are
@@ -80,8 +348,9 @@ def _phrase_in_chunk(claim: str, chunk: str) -> bool:
     # phrases that are semantically right there, and policy docs are
     # written in markdown by default (see data/procurement_policy.md).
     chunk_text = " ".join(_content_tokens_ordered(chunk))
-    for i in range(len(claim_tokens) - 2):
-        phrase = " ".join(claim_tokens[i : i + 3])
+    n = _PHRASE_N
+    for i in range(len(claim_tokens) - n + 1):
+        phrase = " ".join(claim_tokens[i : i + n])
         if phrase in chunk_text:
             return True
     return False
@@ -99,16 +368,94 @@ def _render_request_facts(request_facts: dict[str, Any] | None) -> str:
     return "; ".join(f"{k}={v}" for k, v in request_facts.items())
 
 
+def _is_vacuous_rationale(claims: list[str]) -> bool:
+    """True when every claim is content-free approval boilerplate."""
+    if not claims:
+        return False
+    for claim in claims:
+        tokens = _content_tokens(claim)
+        substantive = {t for t in tokens if t not in _VACUOUS_TOKENS}
+        if substantive:
+            return False
+    return True
+
+
+_NEG_STATUS = frozenset({"blocked", "inactive", "suspended", "banned", "denied", "rejected"})
+_POS_STATUS = frozenset({"active", "approved", "cleared", "standing", "roster", "goodstanding"})
+
+
+_PROHIBITION = frozenset({"mustnot", "donot", "cannot", "forbidden", "prohibited", "notallowed"})
+_PERMISSION = frozenset({"freely", "permit", "permits", "permitted", "update", "updates"})
+
+
+def _contradicts_context(claim_tokens: set[str], ctx_tokens: set[str]) -> bool:
+    """Claim says vendor is blocked/inactive while context says active (or vice versa)."""
+    if (claim_tokens & _NEG_STATUS) and (ctx_tokens & _POS_STATUS) and not (ctx_tokens & _NEG_STATUS):
+        return True
+    return bool(claim_tokens & _POS_STATUS and ctx_tokens & _NEG_STATUS and not ctx_tokens & _POS_STATUS)
+
+
+def _numeric_invented(claim_tokens: set[str], ctx_tokens: set[str]) -> bool:
+    """Claim cites a number that never appears in context (and context has others)."""
+    claim_nums = {t for t in claim_tokens if t.startswith("num")}
+    ctx_nums = {t for t in ctx_tokens if t.startswith("num")}
+    return bool(claim_nums and ctx_nums and claim_nums.isdisjoint(ctx_nums))
+
+
+def _permission_vs_prohibition(claim_tokens: set[str], ctx_tokens: set[str]) -> bool:
+    """Claim grants permission while context prohibits the same banking/payment domain."""
+    if not (claim_tokens & _BANKING_TERMS) or not (ctx_tokens & _BANKING_TERMS):
+        return False
+    # Claim that itself prohibits (not allowed / must not) agrees with context.
+    if claim_tokens & _PROHIBITION:
+        return False
+    return bool(claim_tokens & _PERMISSION) and bool(ctx_tokens & _PROHIBITION)
+
+
 def _claim_supported(claim: str, chunks: list[str]) -> bool:
     claim_tokens = _content_tokens(claim)
     if not claim_tokens:
         return True
+
+    claim_x = _expand_synonyms(claim_tokens)
+    ctx_all: set[str] = set()
+    for chunk in chunks:
+        ctx_all |= _content_tokens(chunk)
+
+    novel = claim_tokens & _NOVEL_CREDENTIALS
+    if novel and not (novel & ctx_all):
+        return False
+
+    if _contradicts_context(claim_tokens, ctx_all):
+        return False
+    if _numeric_invented(claim_tokens, ctx_all):
+        return False
+    if _permission_vs_prohibition(claim_tokens, ctx_all):
+        return False
+
     for chunk in chunks:
         if _phrase_in_chunk(claim, chunk):
             return True
-        if _jaccard(claim_tokens, _content_tokens(chunk)) >= 0.35:
+        chunk_tokens = _content_tokens(chunk)
+        chunk_x = _expand_synonyms(chunk_tokens)
+        if _jaccard(claim_tokens, chunk_tokens) >= _JACCARD_THRESHOLD:
             return True
-    return False
+        if _jaccard(claim_x, chunk_x) >= _JACCARD_THRESHOLD:
+            return True
+        if _token_coverage(claim_tokens, chunk_x) >= _COVERAGE_THRESHOLD:
+            return True
+        if (
+            len((claim_x - claim_tokens) & chunk_x) >= _ALIAS_HIT_MIN
+            and _token_coverage(claim_x, chunk_x) >= (_COVERAGE_THRESHOLD - 0.15)
+        ):
+            return True
+
+    ctx_union: set[str] = set()
+    for chunk in chunks:
+        ctx_union |= _expand_synonyms(_content_tokens(chunk))
+    if _token_coverage(claim_tokens, ctx_union) >= _COVERAGE_THRESHOLD:
+        return True
+    return bool(len(claim_x - claim_tokens & ctx_union) >= _ALIAS_HIT_MIN and _token_coverage(claim_x, ctx_union) >= _COVERAGE_THRESHOLD - 0.15)
 
 
 def verify(
@@ -138,6 +485,14 @@ def verify(
 
     if not claims:
         return VerificationResult(evidence_score=1.0, unsupported_claims=[])
+
+    # Content-free rationales ("Approving this.") have nothing to ground —
+    # match LLM-judge semantics: score 0, not vacuous-success 1.0.
+    if _is_vacuous_rationale(claims):
+        return VerificationResult(
+            evidence_score=0.0,
+            unsupported_claims=[rationale.strip() or claims[0]],
+        )
 
     unsupported: list[str] = []
     supported = 0

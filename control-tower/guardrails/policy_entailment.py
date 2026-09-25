@@ -4,10 +4,29 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 from contracts.schemas import PolicyEntailmentResult, ToolCallRequest
 
 _LLM_TEXT_MAX = 4000
+_RUBRIC_PATH = Path(__file__).with_name("POLICY_ENTAILMENT_RUBRIC.md")
+_rubric_text: str | None = None
+
+
+def load_policy_entailment_rubric() -> str:
+    """Return the fixed system-prompt rubric (cached after first read)."""
+    global _rubric_text
+    if _rubric_text is None:
+        _rubric_text = _RUBRIC_PATH.read_text(encoding="utf-8").strip()
+        if not _rubric_text:
+            raise RuntimeError(f"empty policy entailment rubric: {_RUBRIC_PATH}")
+    return _rubric_text
+
+
+def reset_policy_entailment_rubric_cache() -> None:
+    """Drop cached rubric text — for tests that rewrite the MD file."""
+    global _rubric_text
+    _rubric_text = None
 
 
 def _truncate(text: str) -> str:
@@ -17,48 +36,44 @@ def _truncate(text: str) -> str:
     return stripped[: _LLM_TEXT_MAX - 3] + "..."
 
 
-def _llm_entail(
+def _build_human_prompt(
     request: ToolCallRequest,
     policy_excerpts: list[str],
-) -> PolicyEntailmentResult:
-    """Structured LLM judge: does the proposed tool call comply with policy?"""
-    from guardrails.llm import get_chat_openai
-
-    llm = get_chat_openai()
-    structured = llm.with_structured_output(PolicyEntailmentResult, method="function_calling")
-
+) -> str:
     excerpts_block = (
         "\n\n".join(f"[{i}] {_truncate(t)}" for i, t in enumerate(policy_excerpts))
         or "(none)"
     )
     args_json = json.dumps(request.tool_args, default=str)
-    prompt = (
-        "You are a policy-compliance judge for an AI agent governance system. "
-        "An agent proposed a tool call. Decide whether the proposed action "
-        "complies with the semantic rules in the policy excerpts below.\n\n"
-        "Focus on semantic / clause-level rules that an allow-list cannot "
-        "express, for example:\n"
-        "- Vendor must be active / in good standing on the master list\n"
-        "- KYC / identity documents must be complete before verification\n"
-        "- No split or duplicate POs to bypass amount bands\n"
-        "- Required checks (budget, sanctions, receipts) must pass\n\n"
-        "Do NOT re-litigate tool allow-lists or numeric amount caps — another "
-        "gateway already enforces those. Only flag semantic policy meaning.\n\n"
-        "Return:\n"
-        "- compliant: true only if the proposal does not violate any semantic "
-        "clause in the excerpts (or excerpts are silent / irrelevant)\n"
-        "- violated_clauses: short clause labels or paraphrases for each "
-        "violation (empty when compliant)\n"
-        "- severity: 'none' when compliant; 'soft' for advisory / incomplete-"
-        "evidence concerns that raise risk but need not force review alone; "
-        "'hard' for clear contradictions (e.g. blocked vendor, incomplete KYC "
-        "for auto-verify, explicit split-PO bypass)\n\n"
+    return (
+        "Judge the proposed tool call against the policy excerpts using the "
+        "fixed rubric in the system message.\n\n"
         f"Tool: {request.tool_name}\n"
         f"Args: {args_json}\n"
         f"Agent rationale: {request.agent_rationale or '(none)'}\n\n"
         f"Policy excerpts:\n{excerpts_block}\n"
     )
-    raw = structured.invoke(prompt)
+
+
+def _llm_entail(
+    request: ToolCallRequest,
+    policy_excerpts: list[str],
+) -> PolicyEntailmentResult:
+    """Structured LLM judge: does the proposed tool call comply with policy?"""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from guardrails.llm import get_chat_openai
+
+    llm = get_chat_openai()
+    structured = llm.bind(temperature=0).with_structured_output(
+        PolicyEntailmentResult, method="function_calling"
+    )
+
+    messages = [
+        SystemMessage(content=load_policy_entailment_rubric()),
+        HumanMessage(content=_build_human_prompt(request, policy_excerpts)),
+    ]
+    raw = structured.invoke(messages)
     result = PolicyEntailmentResult.model_validate(raw)
     if result.compliant:
         return PolicyEntailmentResult(compliant=True, violated_clauses=[], severity="none")

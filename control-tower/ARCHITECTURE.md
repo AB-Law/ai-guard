@@ -263,6 +263,8 @@ control-tower/
 │   ├── injection_guard.py
 │   ├── output_verifier.py
 │   ├── verification_mode.py   # heuristic vs LLM path + failure contracts
+│   ├── policy_entailment.py   # semantic policy-compliance LLM judge
+│   ├── POLICY_ENTAILMENT_RUBRIC.md  # fixed system-prompt rubric (violation / borderline / compliant)
 │   └── risk_scorer.py
 ├── audit/
 │   ├── log_store.py           # SQLite + hash chain
@@ -281,6 +283,8 @@ control-tower/
 └── tests/
     ├── eval/                   # offline path-consistency gates
     └── fixtures/               # labeled eval JSONL + disagreement allowlists
+    ├── fixtures/              # labeled judge cases (e.g. policy_entailment_cases.json)
+    └── eval/                  # offline consistency gates (no live API; runs in CI)
 ```
 ---
 
