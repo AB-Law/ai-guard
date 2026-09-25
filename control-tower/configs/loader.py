@@ -27,10 +27,13 @@ class AllowedTool(BaseModel):
     name: str
     max_auto_amount: float | None = None
     # Display hint only — gateway.py compares max_auto_amount against
-    # tool_args["amount"] regardless of what that number means. Most tools are
-    # dollar-denominated ("usd"); a tool like assign_risk_rating uses the same
-    # field for a rating ceiling, so the UI needs to know how to label it.
-    unit: str = "usd"
+    # tool_args["amount"] regardless of what that number means. A tool like
+    # assign_risk_rating uses the same field for a rating ceiling rather than
+    # a dollar amount, so the UI needs to know how to label it. Defaulting to
+    # "usd" here used to silently mislabel every tool whose YAML didn't set
+    # unit explicitly (including ones with no max_auto_amount at all, where
+    # a unit means nothing) — leave it blank rather than assume currency.
+    unit: str = ""
 
 
 class ApprovalThreshold(BaseModel):

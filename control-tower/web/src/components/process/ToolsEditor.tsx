@@ -28,7 +28,11 @@ export function ToolsEditor({
   function addTool() {
     onChange({
       ...value,
-      allowedTools: [...value.allowedTools, { name: '', max_auto_amount: null, unit: 'usd' }],
+      // No default unit — a tool call's amount isn't necessarily money (see
+      // configs/risk_rating.yaml, which caps assign_risk_rating at "3 rating"
+      // not "$3"). Forcing "usd" here silently mislabeled every non-currency
+      // guardrail unless someone remembered to clear it.
+      allowedTools: [...value.allowedTools, { name: '', max_auto_amount: null, unit: '' }],
     })
   }
 
@@ -47,9 +51,23 @@ export function ToolsEditor({
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
           Allow-listed tools
         </div>
+        <div className="mb-2 text-[11.5px] leading-snug text-text-muted">
+          Any tool call above its ceiling escalates for approval instead of running automatically — leave the
+          ceiling blank for a tool with no natural amount (e.g. a lookup) or one that should always escalate.
+          The unit is a label only ("usd", "rating", "count", …) — it's shown on the dashboard but never
+          converted or enforced; the gateway just compares the raw number the agent sends.
+        </div>
+        {value.allowedTools.length > 0 && (
+          <div className="mb-1.5 flex gap-2 px-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-text-muted">
+            <span className="min-w-[160px] flex-1">Tool name</span>
+            <span className="w-[130px]">Auto-approve ceiling</span>
+            <span className="w-[90px]">Unit</span>
+            <span className="w-[15px]" />
+          </div>
+        )}
         <div className="flex flex-col gap-2">
           {value.allowedTools.map((tool, i) => (
             <div key={i} className="flex flex-wrap items-center gap-2">
@@ -61,7 +79,7 @@ export function ToolsEditor({
               />
               <Input
                 type="number"
-                placeholder="unlimited"
+                placeholder="no ceiling"
                 value={tool.max_auto_amount ?? ''}
                 onChange={(e) =>
                   updateTool(i, { max_auto_amount: e.target.value === '' ? null : Number(e.target.value) })
@@ -69,10 +87,12 @@ export function ToolsEditor({
                 className="w-[130px] text-[12.5px]"
               />
               <Input
-                placeholder="usd"
+                placeholder={tool.max_auto_amount == null ? 'n/a' : 'usd, rating…'}
                 value={tool.unit}
+                disabled={tool.max_auto_amount == null}
                 onChange={(e) => updateTool(i, { unit: e.target.value })}
-                className="w-[90px] text-[12.5px]"
+                title={tool.max_auto_amount == null ? 'No ceiling set — there is nothing for a unit to label' : undefined}
+                className="w-[90px] text-[12.5px] disabled:opacity-40"
               />
               <button
                 type="button"

@@ -157,7 +157,7 @@ class CreateApplicationBody(BaseModel):
 class ProcessToolBody(BaseModel):
     name: str = Field(min_length=1)
     max_auto_amount: float | None = None
-    unit: str = "usd"
+    unit: str = ""
 
 
 class CreateProcessBody(BaseModel):
