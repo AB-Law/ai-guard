@@ -18,13 +18,20 @@ from __future__ import annotations
 from .client import GuardClient
 from .config import configure, get_config
 from .decorator import guard
-from .exceptions import AiGuardBlocked, AiGuardDecisionError, AiGuardError, AiGuardEscalated
+from .exceptions import (
+    AiGuardBlocked,
+    AiGuardDecisionError,
+    AiGuardError,
+    AiGuardEscalated,
+    AiGuardRejected,
+)
 
 __all__ = [
     "AiGuardBlocked",
     "AiGuardDecisionError",
     "AiGuardError",
     "AiGuardEscalated",
+    "AiGuardRejected",
     "GuardClient",
     "configure",
     "get_config",

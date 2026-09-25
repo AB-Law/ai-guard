@@ -87,7 +87,34 @@ Because it buffers rationale/context across separate callback calls (no single "
 
 ## Escalation
 
-`AiGuardEscalated` carries `decision["call_id"]` — the id a human approver would use against the tower's own `/approvals/{call_id}` endpoint. Resuming *your* code after that approval (vs. the tower's own case/HITL flow) is intentionally out of scope for this version — treat escalation as "stop and hand off," not "block until approved."
+An `escalate` decision means a human needs to sign off before the call can run — the wrapped function never executes on its own. `decision["call_id"]` (on `AiGuardEscalated`, or in the dict `evaluate()` returns directly) is what you resolve it with. The tower **never executes anything on your behalf**, escalated or not — resolving an approval only flips the stored decision; you always run your own function afterward, gated on the result, exactly like a normal `allow`.
+
+Three ways to use it, in increasing order of how much you want this SDK to do for you:
+
+**1. Poll it yourself.** `GuardClient.get_approval(call_id)` returns the same shape every time: `{call_id, case_id, process, status, decision, request, source_app, created_at}`, with `status` moving from `"pending_approval"` to `"completed"` or `"rejected"`. Check `decision["decision"]` (`"allow"` or `"block"`) once it's no longer pending.
+
+**2. Block until resolved.** `GuardClient.wait_for_decision(call_id, poll_interval=2.0, timeout=120.0)` polls `get_approval` for you and returns once resolved, or raises `TimeoutError` if the deadline passes first. Fine for a background worker or a CLI script; don't call it from a request handler you can't afford to hang.
+
+**3. Let the decorator block for you.** `@guard(..., on_escalate="wait")` calls `wait_for_decision` internally — approved, it runs your function like nothing happened; rejected, it raises `AiGuardRejected`; timed out, it raises `AiGuardEscalated` (same exception as the default path, just later) instead of a bare `TimeoutError`, so you only ever need to catch the three `aiguard` exceptions:
+
+```python
+@aiguard.guard(tool_name="create_purchase_order", on_escalate="wait", wait_timeout=300)
+def create_purchase_order(vendor_id: str, amount: float, item: str) -> dict:
+    ...  # only runs once a human approves — see below for who resolves it
+
+try:
+    create_purchase_order(vendor_id="V-1001", amount=75000, item="Server rack")
+except aiguard.AiGuardRejected as exc:
+    print("a human said no:", exc.reason)
+except aiguard.AiGuardEscalated as exc:
+    print("still pending after the timeout:", exc.call_id)
+```
+
+**Who actually clicks approve?** Your own app, not the tower's dashboard. Show the pending `call_id` in your own interface (e.g. a chat bot's "waiting for finance sign-off" card), and when your user clicks Approve, call `GuardClient.resolve_approval(call_id, action="approve", actor="alice@yourcompany.com")` directly — that's what makes "human approval inside your own app" real. If something elsewhere is blocked on `wait_for_decision` (or polling `get_approval`), it picks up the change within one `poll_interval`.
+
+The tower's own dashboard can **see** every escalation, including these (Approvals queue, tagged `origin: "guard_evaluate"`) — full visibility is the point of a control tower — but it cannot resolve them; that action is scoped to the originating application's own API key only. This is deliberate, not a limitation: approval for an SDK-integrated call belongs inside the application that owns the call, where the person approving has the actual context (the row in your spreadsheet, the customer they're talking to) — not a generic dashboard row. (Contrast with cases submitted through `/cases` directly — those genuinely are approved from the dashboard, since the tower owns that flow end to end.)
+
+Authorization in full: an application's own API key can `get_approval`/`resolve_approval` only calls it originated (`source_app` must match) — never another application's. A dashboard session token can `get_approval` (view) any call, but `resolve_approval` from a dashboard token is always a 403 for a guard_evaluate call. Either on an unknown `call_id` is a 404; resolving an already-resolved call is a 409.
 
 ## Roadmap (not built yet)
 

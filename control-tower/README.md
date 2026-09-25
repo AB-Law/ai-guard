@@ -34,6 +34,9 @@ Key endpoints:
 | `GET` | `/cases/{case_id}/audit` | Audit trail for a case |
 | `GET` | `/audit/verify` | Hash-chain integrity check |
 | `POST` | `/approvals/{call_id}` | Approve/reject an escalated case (resumes the graph) |
+| `POST` | `/guard/evaluate` | Evaluate one tool call from an external agent (no `/cases`, no graph) — what the `aiguard` SDK calls |
+| `GET` | `/guard/approvals/{call_id}` | Status of a `/guard/evaluate` call that escalated — dashboard (any) or the owning app's API key |
+| `POST` | `/guard/approvals/{call_id}` | Approve/reject a `/guard/evaluate` escalation — owning app's API key only, dashboard is view-only for these |
 | `POST` | `/investigate` | Ask the investigation assistant a question over the audit log |
 | `POST` | `/knowledge/documents` | Upload a `.md`/`.txt`/`.csv` doc — indexed into the live KB immediately, no restart |
 | `GET` | `/traffic/recent` | Recent cases with per-stage pipeline status, for the live traffic view |

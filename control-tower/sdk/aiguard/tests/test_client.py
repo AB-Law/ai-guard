@@ -1,10 +1,11 @@
-"""Unit tests for GuardClient — mocks httpx.post so these run with no server."""
+"""Unit tests for GuardClient — mocks httpx.post/get so these run with no server."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
 import aiguard
+import pytest
 from aiguard.client import GuardClient
 
 
@@ -68,3 +69,73 @@ def test_per_call_process_overrides_global_config() -> None:
         )
 
     assert mock_post.call_args.kwargs["json"]["process"] == "onboarding_kyc"
+
+
+def test_get_approval_gets_the_guard_approvals_endpoint() -> None:
+    with patch("aiguard.client.httpx.get") as mock_get:
+        mock_get.return_value = _mock_response(
+            {"call_id": "c1", "status": "pending_approval", "decision": {"decision": "escalate"}}
+        )
+        client = GuardClient(api_url="http://example.test:9000", api_key="sk_test_abc")
+        result = client.get_approval("c1")
+
+    assert result["status"] == "pending_approval"
+    args, kwargs = mock_get.call_args
+    assert args[0] == "http://example.test:9000/guard/approvals/c1"
+    assert kwargs["headers"] == {"Authorization": "Bearer sk_test_abc"}
+
+
+def test_get_approval_omits_auth_header_when_no_api_key() -> None:
+    with patch("aiguard.client.httpx.get") as mock_get:
+        mock_get.return_value = _mock_response({"call_id": "c1", "status": "completed"})
+        GuardClient(api_url="http://example.test:9000").get_approval("c1")
+
+    assert mock_get.call_args.kwargs["headers"] == {}
+
+
+def test_resolve_approval_posts_action_and_actor() -> None:
+    with patch("aiguard.client.httpx.post") as mock_post:
+        mock_post.return_value = _mock_response(
+            {"call_id": "c1", "status": "completed", "decision": {"decision": "allow"}}
+        )
+        client = GuardClient(api_url="http://example.test:9000")
+        result = client.resolve_approval("c1", action="approve", actor="alice")
+
+    assert result["status"] == "completed"
+    args, kwargs = mock_post.call_args
+    assert args[0] == "http://example.test:9000/guard/approvals/c1"
+    assert kwargs["json"] == {"action": "approve", "actor": "alice"}
+
+
+def test_wait_for_decision_returns_immediately_when_already_resolved() -> None:
+    with patch("aiguard.client.httpx.get") as mock_get:
+        mock_get.return_value = _mock_response(
+            {"call_id": "c1", "status": "completed", "decision": {"decision": "allow"}}
+        )
+        client = GuardClient(api_url="http://example.test:9000")
+        result = client.wait_for_decision("c1", poll_interval=0.01, timeout=1.0)
+
+    assert result["status"] == "completed"
+    assert mock_get.call_count == 1
+
+
+def test_wait_for_decision_polls_until_resolved() -> None:
+    responses = [
+        _mock_response({"call_id": "c1", "status": "pending_approval"}),
+        _mock_response({"call_id": "c1", "status": "pending_approval"}),
+        _mock_response({"call_id": "c1", "status": "completed", "decision": {"decision": "allow"}}),
+    ]
+    with patch("aiguard.client.httpx.get", side_effect=responses) as mock_get:
+        client = GuardClient(api_url="http://example.test:9000")
+        result = client.wait_for_decision("c1", poll_interval=0.001, timeout=5.0)
+
+    assert result["status"] == "completed"
+    assert mock_get.call_count == 3
+
+
+def test_wait_for_decision_times_out_while_still_pending() -> None:
+    with patch("aiguard.client.httpx.get") as mock_get:
+        mock_get.return_value = _mock_response({"call_id": "c1", "status": "pending_approval"})
+        client = GuardClient(api_url="http://example.test:9000")
+        with pytest.raises(TimeoutError):
+            client.wait_for_decision("c1", poll_interval=0.01, timeout=0.03)

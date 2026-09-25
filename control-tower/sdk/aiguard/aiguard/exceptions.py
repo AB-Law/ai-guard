@@ -28,8 +28,20 @@ class AiGuardBlocked(AiGuardDecisionError):
 class AiGuardEscalated(AiGuardDecisionError):
     """The tower needs a human to approve this call before it can run.
 
-    The wrapped function is NOT executed. decision["call_id"] is the id a
-    human approver would use against the tower's own approval flow — how
-    that resumes the caller's own code is intentionally out of scope for v0
-    of this SDK (see README "Escalation" for the pattern).
+    The wrapped function is NOT executed. decision["call_id"] is the id to
+    poll against GuardClient.get_approval()/wait_for_decision(), or to
+    resolve directly with GuardClient.resolve_approval() — see README
+    "Escalation" for the full pattern, including guard(..., on_escalate=
+    "wait") for the decorator-level version that blocks for you.
+    """
+
+
+class AiGuardRejected(AiGuardDecisionError):
+    """An escalated call was resolved by a human as "reject", not approved.
+
+    Only ever raised by guard(..., on_escalate="wait") after blocking on
+    wait_for_decision() — a plain evaluate()/guard() call never raises this
+    directly, since rejection can only happen after escalation, and
+    resolution is asynchronous relative to the original call. The wrapped
+    function was NOT executed.
     """

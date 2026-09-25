@@ -1,11 +1,13 @@
-"""Thin HTTP client for POST /guard/evaluate — the only endpoint this SDK
-calls. No chromadb/langgraph/fastapi dependency; the policy engine lives
-entirely on the tower side, this just asks it a question per tool call.
+"""Thin HTTP client for the tower's /guard/* endpoints — POST /guard/evaluate
+plus the approval pair (GET/POST /guard/approvals/{call_id}). No chromadb/
+langgraph/fastapi dependency; the policy engine and approval state live
+entirely on the tower side, this just asks it questions per tool call.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import time
+from typing import Any, Literal
 
 import httpx
 
@@ -55,15 +57,80 @@ class GuardClient:
         app_name = source_app if source_app is not None else cfg.source_app
         if app_name:
             payload["source_app"] = app_name
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         resp = httpx.post(
             f"{self.api_url}/guard/evaluate",
             json=payload,
-            headers=headers,
+            headers=self._headers(),
             timeout=self.timeout,
         )
         resp.raise_for_status()
         return resp.json()
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+
+    def get_approval(self, call_id: str) -> dict[str, Any]:
+        """Status of a call submitted via evaluate(). Returns
+        {call_id, case_id, process, status, decision, request, source_app,
+        created_at} — status is "pending_approval" while waiting, else
+        "completed"/"rejected". Works for any call_id this API key
+        originated (or any call_id at all, for a dashboard token); a 403
+        means it belongs to a different application.
+        """
+        resp = httpx.get(
+            f"{self.api_url}/guard/approvals/{call_id}",
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def resolve_approval(
+        self, call_id: str, *, action: Literal["approve", "reject"], actor: str
+    ) -> dict[str, Any]:
+        """Record a human decision on an escalated call. This only flips the
+        tower's stored decision (allow on approve, block on reject) and
+        writes an audit entry — it never executes anything on your behalf.
+        Run your own tool function afterward, gated on the returned
+        decision, the same way you would for a decision that was never
+        escalated in the first place.
+        """
+        resp = httpx.post(
+            f"{self.api_url}/guard/approvals/{call_id}",
+            json={"action": action, "actor": actor},
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def wait_for_decision(
+        self,
+        call_id: str,
+        *,
+        poll_interval: float = 2.0,
+        timeout: float = 120.0,
+    ) -> dict[str, Any]:
+        """Block until an escalated call_id is resolved (by anyone — your
+        own app's UI calling resolve_approval(), a teammate using the
+        tower's own dashboard, or another integration entirely) or timeout
+        elapses. Returns the same shape as get_approval(); raises
+        TimeoutError if still pending_approval when the deadline passes.
+
+        This is the piece that makes "wait for a human" a single call
+        instead of you hand-rolling a poll loop — see guard(..., on_escalate
+        ="wait") for the decorator-level version of this same pattern.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            status = self.get_approval(call_id)
+            if status.get("status") != "pending_approval":
+                return status
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"call_id {call_id!r} still pending_approval after {timeout}s"
+                )
+            time.sleep(poll_interval)
 
 
 def default_client() -> GuardClient:

@@ -23,8 +23,9 @@ from api import auth
 from api.case_store_db import build_case_store, build_kv_store
 from api.checkpointer import build_checkpointer
 from audit.backend import build_audit_store
+from audit.log_store import AppendInput
 from configs.loader import ProcessConfig, known_processes, load_process
-from contracts.schemas import ToolCallRequest
+from contracts.schemas import GatewayDecision, ToolCallRequest
 from guardrails import evaluate_tool_call
 from investigation_assistant.qa_agent import (
     InvestigationAnswer,
@@ -750,10 +751,15 @@ def create_app(
         # Surface SDK / external evaluations on /cases and /traffic/recent so
         # simulated apps show up alongside graph-driven /cases traffic.
         case_id = f"guard-{call_id}"
+        # "escalate" here has no LangGraph thread to resume (unlike /cases) —
+        # origin="guard_evaluate" tells the two approval endpoints below
+        # (and the dashboard's own POST /approvals/{call_id}) to resolve it
+        # via _resolve_guard_evaluate_case instead of resume_case.
+        status = "pending_approval" if decision.decision == "escalate" else "completed"
         store.cases[case_id] = {
             "case_id": case_id,
             "process": process,
-            "status": "completed",
+            "status": status,
             "call_id": call_id,
             "gateway_decision": decision.model_dump(),
             "tool_result": None,
@@ -763,9 +769,121 @@ def create_app(
             },
             "source_app": source_app,
             "created_at": _utc_now(),
+            "origin": "guard_evaluate",
         }
         store.call_to_case[call_id] = case_id
         return decision.model_dump()
+
+    def _guard_case_snapshot(case: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "call_id": case.get("call_id"),
+            "case_id": case.get("case_id"),
+            "process": case.get("process"),
+            "status": case.get("status"),
+            "decision": case.get("gateway_decision"),
+            "request": case.get("request"),
+            "source_app": case.get("source_app"),
+            "created_at": case.get("created_at"),
+        }
+
+    def _lookup_guard_case_by_call_id(call_id: str) -> dict[str, Any]:
+        case_id = store.call_to_case.get(call_id)
+        case = store.cases.get(case_id) if case_id else None
+        if case is None or case.get("origin") != "guard_evaluate":
+            raise HTTPException(status_code=404, detail="call_id not found")
+        return case
+
+    def _authorize_guard_case_view(caller: dict[str, Any], case: dict[str, Any]) -> None:
+        """Read access: the tower's dashboard can see any guard_evaluate
+        escalation (visibility into everything is the whole point of a
+        control tower), and an application's own API key can see its own."""
+        if caller.get("type") != "api_key":
+            return
+        if caller.get("source_app") and caller.get("source_app") != case.get("source_app"):
+            raise HTTPException(status_code=403, detail="not authorized for this call_id")
+
+    def _authorize_guard_case_resolve(caller: dict[str, Any], case: dict[str, Any]) -> None:
+        """Write access: only the originating application's own API key may
+        approve/reject a guard_evaluate escalation. Deliberately narrower
+        than view access — this decision belongs inside the application
+        that owns the call (its own approval UI), not the tower's dashboard,
+        which stays read-only for these cases (contrast with LangGraph-based
+        /cases escalations, where the dashboard IS the approver)."""
+        if caller.get("type") != "api_key":
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "guard_evaluate escalations can only be resolved by the "
+                    "originating application's own API key, not the dashboard"
+                ),
+            )
+        if caller.get("source_app") and caller.get("source_app") != case.get("source_app"):
+            raise HTTPException(status_code=403, detail="not authorized for this call_id")
+
+    def _resolve_guard_evaluate_case(
+        case: dict[str, Any], *, action: str, actor: str
+    ) -> dict[str, Any]:
+        """Resolve a pending guard_evaluate escalation. Never executes the
+        caller's tool — that stays the caller's own code, run after it sees
+        the resolved decision (via polling or its own approval UI). Mirrors
+        agent/graph.py's interrupt_for_approval audit shape (event_type=
+        "approval") so this shows up the same way in the audit trail whether
+        the call went through /cases or /guard/evaluate."""
+        gw = dict(case.get("gateway_decision") or {})
+        new_decision = "allow" if action == "approve" else "block"
+        original_reason = gw.get("reason", "")
+        gw["decision"] = new_decision
+        gw["reason"] = f"Escalated call {action}d by {actor}. Original: {original_reason}"
+        case["gateway_decision"] = gw
+        case["status"] = "completed" if action == "approve" else "rejected"
+        case["resolved_at"] = _utc_now()
+        case["resolved_by"] = actor
+
+        app.state.audit.append(
+            AppendInput(
+                process=case["process"],
+                step_id="guard_approval",
+                event_type="approval",
+                payload={
+                    "case_id": case["case_id"],
+                    "call_id": case["call_id"],
+                    "action": action,
+                    "actor": actor,
+                },
+                scores=GatewayDecision.model_validate(gw),
+            )
+        )
+        return _guard_case_snapshot(case)
+
+    @app.get("/guard/approvals/{call_id}")
+    def get_guard_approval(
+        call_id: str, caller: dict[str, Any] = dashboard_or_api_key
+    ) -> dict[str, Any]:
+        """Status check for a /guard/evaluate call that escalated — what the
+        aiguard SDK's wait_for_decision() polls. No LangGraph thread is
+        involved; this just reads the case record."""
+        case = _lookup_guard_case_by_call_id(call_id)
+        _authorize_guard_case_view(caller, case)
+        return _guard_case_snapshot(case)
+
+    @app.post("/guard/approvals/{call_id}")
+    def resolve_guard_approval(
+        call_id: str,
+        body: ApprovalBody,
+        caller: dict[str, Any] = dashboard_or_api_key,
+    ) -> dict[str, Any]:
+        """Resolve a /guard/evaluate escalation. Only the originating
+        application's own API key can call this — approval for these calls
+        happens inside that application's own UI, not the tower's dashboard
+        (see _authorize_guard_case_resolve)."""
+        case = _lookup_guard_case_by_call_id(call_id)
+        _authorize_guard_case_resolve(caller, case)
+        if case.get("status") != "pending_approval":
+            raise HTTPException(
+                status_code=409,
+                detail=f"call_id {call_id} is not pending approval (status={case.get('status')})",
+            )
+        return _resolve_guard_evaluate_case(case, action=body.action, actor=body.actor)
 
     @app.get("/approvals", dependencies=[Depends(require_dashboard_token)])
     def list_approvals() -> dict[str, Any]:
@@ -797,6 +915,13 @@ def create_app(
                     "policy_refs": gw.get("policy_refs") or [],
                     "source_app": r.get("source_app"),
                     "requested_at": r.get("created_at"),
+                    "origin": r.get("origin") or "graph",
+                    # guard_evaluate escalations are resolved only by their
+                    # owning application's own API key (see
+                    # _authorize_guard_case_resolve) — the dashboard is
+                    # view-only for these; a frontend should disable/hide the
+                    # Approve/Reject buttons on rows where this is false.
+                    "resolvable_from_dashboard": (r.get("origin") or "graph") != "guard_evaluate",
                 }
             )
         return {"approvals": out, "count": len(out)}
@@ -811,6 +936,22 @@ def create_app(
                     break
         if not case_id:
             raise HTTPException(status_code=404, detail="call_id not found")
+
+        case = store.cases.get(case_id) or {}
+        if case.get("origin") == "guard_evaluate":
+            # No LangGraph thread here — but more importantly, the dashboard
+            # is not the approver for these: resolving a guard_evaluate
+            # escalation is scoped to the owning application's own API key
+            # (its own UI), not this dashboard-only endpoint. The dashboard
+            # can still see it (GET /approvals, origin="guard_evaluate").
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "This call was submitted via /guard/evaluate — it can only be "
+                    "resolved by its owning application's own API key, at "
+                    f"POST /guard/approvals/{call_id}, not from the dashboard."
+                ),
+            )
 
         result = resume_case(
             app.state.graph,
