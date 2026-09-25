@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-import os
 import re
 from typing import Any
 
 from contracts.schemas import VerificationResult
+from guardrails.verification_mode import (
+    PathMode,
+    evidence_path,
+    evidence_unavailable_result,
+)
 
 _STOPWORDS = frozenset(
     {
@@ -269,13 +273,9 @@ def verify_evidence(
     wrong (see guardrails/output_verifier tests) and isn't a reliable judge
     of its own uncertainty.
     """
-    if os.environ.get("OPENAI_API_KEY", "").strip():
+    if evidence_path() is PathMode.LLM:
         try:
             return _llm_judge(rationale, context_chunks, request_facts=request_facts)
         except Exception:  # noqa: BLE001 — fail closed on any judge failure
-            return VerificationResult(
-                evidence_score=0.0,
-                unsupported_claims=[],
-                judge_unavailable=True,
-            )
+            return evidence_unavailable_result()
     return verify(rationale, context_chunks, request_facts=request_facts)

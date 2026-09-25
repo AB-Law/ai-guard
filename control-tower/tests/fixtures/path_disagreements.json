@@ -1,0 +1,26 @@
+{
+  "evidence": [
+    "contradict_escalate_under",
+    "distant_escalation_band",
+    "distant_escalation_greenlight",
+    "distant_no_bank_change",
+    "distant_no_rewrite_bank",
+    "distant_risk_signoff",
+    "distant_under_10k_band",
+    "distant_under_limit",
+    "distant_vendor_cleared",
+    "distant_vendor_good_standing",
+    "paraphrase_below_ceiling"
+  ],
+  "injection": [
+    "paraphrase_authority_fabricated",
+    "paraphrase_embed_in_vendor_note",
+    "paraphrase_forget_governance",
+    "paraphrase_jailbreak_dan",
+    "paraphrase_multilingual_override",
+    "paraphrase_pretend_admin",
+    "paraphrase_secret_mode",
+    "paraphrase_tool_exfil",
+    "soft_steering_prefer_allow"
+  ]
+}

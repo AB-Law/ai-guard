@@ -141,3 +141,31 @@ def test_batch_high_in_any_chunk_short_circuits(monkeypatch: pytest.MonkeyPatch)
         result = scan(chunks)
     mock_classify.assert_not_called()
     assert any(f.severity == "high" for f in result.flags)
+
+
+def test_scan_fail_open_when_llm_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LLM classifier failure must not crash the caller — keep regex flags."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    clean = "Vendor V-1001 is active on the vendor master list."
+    with patch(
+        "guardrails.injection_guard._llm_classify",
+        side_effect=TimeoutError("openai timeout"),
+    ):
+        result = scan(clean)
+    assert result.flags == []
+    assert result.trust == "untrusted"
+
+
+def test_scan_fail_open_preserves_medium_regex_when_llm_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    medium = "You are now reviewing a purchase order."
+    with patch(
+        "guardrails.injection_guard._llm_classify",
+        side_effect=RuntimeError("structured output failed"),
+    ):
+        result = scan(medium)
+    assert len(result.flags) == 1
+    assert result.flags[0].pattern_id == "prompt_injection"
+    assert result.flags[0].severity == "medium"

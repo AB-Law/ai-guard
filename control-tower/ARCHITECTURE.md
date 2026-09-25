@@ -83,6 +83,8 @@ flowchart TB
 
 **Config-driven process definition over hardcoded logic.** Every tool allow-list, threshold, and required document is defined in a per-process YAML file, not in code. This is the entire "accelerator" claim — the cost of doing it is near zero (it's just not hardcoding strings), and the payoff is a live reconfiguration demo.
 
+**Heuristic vs LLM paths (`verification_mode.py`).** Evidence and injection each have a deterministic path (Jaccard/phrase overlap; regex/learned literals) and an optional LLM path when `OPENAI_API_KEY` is set. Contracts live in `guardrails/verification_mode.py`: evidence fails **closed** on judge failure (`judge_unavailable`); injection fails **open** (keep regex flags, never crash the caller). Path disagreements on the labeled eval fixtures are pinned in `tests/fixtures/path_disagreements.json` and asserted by `tests/eval/test_path_consistency.py`.
+
 ---
 
 ## 5. Request lifecycle
@@ -260,6 +262,7 @@ control-tower/
 │   ├── gateway.py             # tool-call gateway
 │   ├── injection_guard.py
 │   ├── output_verifier.py
+│   ├── verification_mode.py   # heuristic vs LLM path + failure contracts
 │   └── risk_scorer.py
 ├── audit/
 │   ├── log_store.py           # SQLite + hash chain
@@ -276,8 +279,9 @@ control-tower/
 ├── investigation_assistant/     # stretch
 │   └── qa_agent.py
 └── tests/
+    ├── eval/                   # offline path-consistency gates
+    └── fixtures/               # labeled eval JSONL + disagreement allowlists
 ```
-
 ---
 
 ## 12. MVP scope
