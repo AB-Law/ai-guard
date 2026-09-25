@@ -8,6 +8,7 @@ import {
   SlidersHorizontal,
   ShieldCheck,
   LogOut,
+  Code2,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { Badge } from '../ui/Badge'
@@ -20,6 +21,7 @@ const navItems = [
   { to: '/logs', label: 'Logs', icon: ScrollText },
   { to: '/audit', label: 'Audit & Integrity', icon: Link2 },
   { to: '/config', label: 'Config', icon: SlidersHorizontal },
+  { to: '/developers', label: 'Developers', icon: Code2 },
 ]
 
 // Below `lg` this collapses to an icon-only rail (no hamburger/overlay state
