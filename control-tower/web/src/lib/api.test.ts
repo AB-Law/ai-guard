@@ -48,6 +48,33 @@ describe('api client', () => {
     expect(approved.status).toBe('completed')
   })
 
+  it('approve sends optional rule_text for policy_change', async () => {
+    let captured: Record<string, string> | null = null
+    server.use(
+      http.post('*/api/approvals/:callId', async ({ request }) => {
+        captured = (await request.json()) as Record<string, string>
+        return HttpResponse.json({
+          case_id: 'pol-x',
+          status: 'completed',
+          call_id: 'policy:x',
+          process: 'procurement_review',
+          origin: 'policy_change',
+          gateway_decision: null,
+          tool_result: null,
+          request: null,
+          source_app: null,
+          created_at: new Date().toISOString(),
+        })
+      }),
+    )
+    await api.approve('policy:x', 'approve', 'tester@aegis.dev', 'forget governance')
+    expect(captured).toMatchObject({
+      action: 'approve',
+      actor: 'tester@aegis.dev',
+      rule_text: 'forget governance',
+    })
+  })
+
   it('configs / audit / applications', async () => {
     const cfg = await api.listConfigs()
     expect(cfg.processes).toHaveLength(2)

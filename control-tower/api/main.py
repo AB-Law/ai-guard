@@ -25,9 +25,16 @@ from api.case_store_db import build_case_store, build_kv_store
 from api.checkpointer import build_checkpointer
 from audit.backend import build_audit_store
 from audit.log_store import AppendInput
-from configs.loader import ProcessConfig, known_processes, load_process
+from configs.loader import (
+    ProcessConfig,
+    apply_rule,
+    clear_process_cache,
+    known_processes,
+    load_process,
+)
 from contracts.schemas import GatewayDecision, ToolCallRequest
 from guardrails import evaluate_tool_call, is_hard_block
+from guardrails.rule_store import get_rule_store
 from investigation_assistant.qa_agent import (
     InvestigationAnswer,
     entries_for_case,
@@ -132,6 +139,10 @@ class SubmitCaseBody(BaseModel):
 class ApprovalBody(BaseModel):
     action: Literal["approve", "reject"]
     actor: str = Field(min_length=1)
+    # Optional tightened literal when approving a policy_change proposal.
+    # Dashboard login is the trust boundary for permanent policy writes (same
+    # as config edits) — no separate role system in v1.
+    rule_text: str | None = None
 
 
 class DemoTamperBody(BaseModel):
@@ -247,6 +258,11 @@ def create_app(
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     audit = build_audit_store(db_url, sqlite_path=db_path)
+    rule_store = get_rule_store(
+        db_path=root / "data" / "learned_rules.db",
+        database_url=db_url,
+        reset=True,
+    )
     kbs: dict[str, KnowledgeBase] = {
         name: build_kb_for_process(name, root) for name in known_processes(root / "configs")
     }
@@ -274,6 +290,7 @@ def create_app(
     app.state.db_path = db_path
     app.state.database_url = db_url
     app.state.audit = audit
+    app.state.rule_store = rule_store
     app.state.kbs = kbs
     app.state.store = store
     app.state.applications = applications
@@ -292,6 +309,7 @@ def create_app(
         kb=app.state.kbs,
         checkpointer=app.state.checkpointer,
         side_effects=app.state.side_effects,
+        case_store=store,
     )
 
     def _snapshot_case(
@@ -477,6 +495,7 @@ def create_app(
             kb=app.state.kbs,
             checkpointer=app.state.checkpointer,
             side_effects=app.state.side_effects,
+            case_store=store,
         )
 
     def _reset_demo_state() -> None:
@@ -484,6 +503,7 @@ def create_app(
         store.cases.clear()
         store.call_to_case.clear()
         app.state.demo_tamper = None
+        app.state.rule_store.clear()
         _rebuild_runtime()
 
     @app.post("/cases")
@@ -729,6 +749,8 @@ def create_app(
                 config,
                 audit=app.state.audit,
                 stage_timings_ms=stage_timings,
+                schedule_learning=background_tasks.add_task,
+                case_store=store,
             )
         else:
             process_kb = _kb_for(process)
@@ -771,6 +793,8 @@ def create_app(
                 retrieved_chunk_ids=retrieved_ids,
                 audit=app.state.audit,
                 stage_timings_ms=stage_timings,
+                schedule_learning=background_tasks.add_task,
+                case_store=store,
             )
         # Surface SDK / external evaluations on /cases and /traffic/recent so
         # simulated apps show up alongside graph-driven /cases traffic.
@@ -886,7 +910,114 @@ def create_app(
                 scores=GatewayDecision.model_validate(gw),
             )
         )
+        # DB-backed CaseStore returns copies — must re-assign after mutate.
+        store.cases[case["case_id"]] = case
+        if case.get("call_id"):
+            store.call_to_case[case["call_id"]] = case["case_id"]
         return _guard_case_snapshot(case)
+
+    def _resolve_policy_change_case(
+        case: dict[str, Any], *, action: str, actor: str, rule_text: str | None = None
+    ) -> dict[str, Any]:
+        """Approve/reject a proposed learned rule. Dashboard JWT only.
+
+        Never calls resume_case — there is no LangGraph checkpointer thread.
+        """
+        req = dict(case.get("request") or {})
+        rule_id = req.get("rule_id")
+        if not rule_id:
+            raise HTTPException(status_code=400, detail="policy_change case missing rule_id")
+        if case.get("status") != "pending_approval":
+            raise HTTPException(
+                status_code=409,
+                detail=f"case is not pending approval (status={case.get('status')})",
+            )
+
+        incident_id = req.get("source_incident_id")
+        if action == "reject":
+            try:
+                app.state.rule_store.reject(rule_id, actor=actor)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            case["status"] = "rejected"
+            case["resolved_at"] = _utc_now()
+            case["resolved_by"] = actor
+            app.state.audit.append(
+                AppendInput(
+                    process=case["process"],
+                    step_id="policy_change",
+                    event_type="approval",
+                    payload={
+                        "case_id": case["case_id"],
+                        "call_id": case["call_id"],
+                        "action": "reject",
+                        "actor": actor,
+                        "rule_id": rule_id,
+                        "incident_id": incident_id,
+                    },
+                )
+            )
+            store.cases[case["case_id"]] = case
+            if case.get("call_id"):
+                store.call_to_case[case["call_id"]] = case["case_id"]
+            return case
+
+        try:
+            activated = apply_rule(
+                case["process"],
+                rule_id=rule_id,
+                approved_by=actor,
+                rule_text=rule_text if rule_text is not None else req.get("rule_text"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        case["status"] = "completed"
+        case["resolved_at"] = _utc_now()
+        case["resolved_by"] = actor
+        req["rule_text"] = getattr(activated, "rule_text", req.get("rule_text"))
+        case["request"] = req
+        gw = dict(case.get("gateway_decision") or {})
+        gw["decision"] = "allow"
+        gw["reason"] = f"Learned rule {rule_id} applied by {actor}"
+        case["gateway_decision"] = gw
+
+        app.state.audit.append(
+            AppendInput(
+                process=case["process"],
+                step_id="policy_change",
+                event_type="approval",
+                payload={
+                    "case_id": case["case_id"],
+                    "call_id": case["call_id"],
+                    "action": "approve",
+                    "actor": actor,
+                    "rule_id": rule_id,
+                    "incident_id": incident_id,
+                    "approved_by": actor,
+                },
+            )
+        )
+        app.state.audit.append(
+            AppendInput(
+                process=case["process"],
+                step_id="policy_change",
+                event_type="rule_applied",
+                payload={
+                    "case_id": case["case_id"],
+                    "call_id": case["call_id"],
+                    "rule_id": rule_id,
+                    "process_id": case["process"],
+                    "rule_text": getattr(activated, "rule_text", None),
+                    "source_incident_id": incident_id,
+                    "approved_by": actor,
+                },
+            )
+        )
+        store.cases[case["case_id"]] = case
+        if case.get("call_id"):
+            store.call_to_case[case["call_id"]] = case["case_id"]
+        return case
 
     @app.get("/guard/approvals/{call_id}")
     def get_guard_approval(
@@ -953,6 +1084,7 @@ def create_app(
                     "call_id": r.get("call_id"),
                     "case_id": r.get("case_id"),
                     "process": r.get("process"),
+                    "origin": r.get("origin"),
                     "tool_name": tool_result.get("tool_name") or request_payload.get("tool_name"),
                     "reason": gw.get("reason"),
                     "risk_score": gw.get("risk_score"),
@@ -961,6 +1093,12 @@ def create_app(
                     "policy_refs": gw.get("policy_refs") or [],
                     "source_app": r.get("source_app"),
                     "requested_at": r.get("created_at"),
+                    # Truncated/hashed only — never raw attack text.
+                    "rule_id": request_payload.get("rule_id"),
+                    "rule_text": request_payload.get("rule_text"),
+                    "matched_span_preview": request_payload.get("matched_span_preview"),
+                    "matched_span_hash": request_payload.get("matched_span_hash"),
+                    "source_incident_id": request_payload.get("source_incident_id"),
                 }
             )
         return {"approvals": out, "count": len(out)}
@@ -990,6 +1128,11 @@ def create_app(
                     "resolved by its owning application's own API key, at "
                     f"POST /guard/approvals/{call_id}, not from the dashboard."
                 ),
+            )
+
+        if case.get("origin") == "policy_change":
+            return _resolve_policy_change_case(
+                case, action=body.action, actor=body.actor, rule_text=body.rule_text
             )
 
         result = resume_case(
@@ -1127,6 +1270,17 @@ def create_app(
                 }
             )
         return {"processes": out}
+
+    @app.post("/configs/reload", dependencies=[Depends(require_dashboard_token)])
+    def reload_configs() -> dict[str, Any]:
+        """Clear in-process process + learned-rule caches on this worker.
+
+        Multi-worker deployments need this (or epoch TTL wait) on each worker
+        after a rule is applied elsewhere for immediate consistency.
+        """
+        clear_process_cache()
+        app.state.rule_store.clear_cache()
+        return {"ok": True, "cleared": ["process_cache", "learned_rules_cache"]}
 
     def _write_process_yaml(process_id: str, cfg: dict[str, Any]) -> None:
         path = root / "configs" / f"{process_id}.yaml"

@@ -40,7 +40,12 @@ def test_demo_seed_endpoint_leaves_escalate_pending(client: TestClient) -> None:
 
     listed = client.get("/cases")
     assert listed.status_code == 200
-    assert len(listed.json()["cases"]) == len(REHEARSAL_IDS)
+    listed_cases = listed.json()["cases"]
+    by_id = {c["case_id"]: c for c in listed_cases}
+    assert set(REHEARSAL_IDS).issubset(by_id)
+    # High-severity injection seed may also enqueue a policy_change proposal.
+    policy_change = [c for c in listed_cases if c.get("origin") == "policy_change"]
+    assert len(listed_cases) == len(REHEARSAL_IDS) + len(policy_change)
 
     call_id = escalate["call_id"]
     approved = client.post(

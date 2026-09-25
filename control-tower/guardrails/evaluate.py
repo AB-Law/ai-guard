@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from audit.log_store import AppendInput, AuditLogStore
 from configs.loader import ProcessConfig
@@ -20,6 +22,7 @@ from guardrails import (
     injection_guard,
     output_verifier,
     policy_entailment,
+    policy_learning,
     risk_scorer,
 )
 
@@ -41,6 +44,36 @@ def _append_audits(audit: AuditLogStore, entries: list[AppendInput]) -> None:
         audit.append(entry)
 
 
+def _schedule_learning(
+    *,
+    schedule: Callable[[Callable[[], None]], None] | None,
+    request: ToolCallRequest,
+    decision: GatewayDecision,
+    flags: list[InjectionFlag],
+    audit: AuditLogStore,
+    case_store: Any | None,
+) -> None:
+    if not policy_learning.should_propose(decision, flags):
+        return
+
+    def _job() -> None:
+        policy_learning.record_incident_and_propose(
+            process_id=request.process,
+            call_id=request.call_id,
+            case_id=request.case_id,
+            tool_name=request.tool_name,
+            decision=decision,
+            flags=flags,
+            audit=audit,
+            case_store=case_store,
+        )
+
+    if schedule is not None:
+        schedule(_job)
+    else:
+        _job()
+
+
 def evaluate_tool_call(
     request: ToolCallRequest,
     config: ProcessConfig,
@@ -51,19 +84,19 @@ def evaluate_tool_call(
     retrieved_chunk_ids: list[str] | None = None,
     audit: AuditLogStore,
     stage_timings_ms: dict[str, float] | None = None,
+    schedule_learning: Callable[[Callable[[], None]], None] | None = None,
+    case_store: Any | None = None,
 ) -> GatewayDecision:
     """Run injection scan, verification, policy entailment, scoring, gateway, audit.
 
-    When injection_flags is provided (e.g. precomputed by the graph's
-    scan_injection node), skip re-scanning so the LLM classifier runs at most
-    once per request. Otherwise batch-scan retrieved_texts.
+    Dual gate for learned rules:
+    1. scan(..., process=) when scanning (graph passes process; evaluate does too)
+    2. Always re-check learned rules before judges — even with precomputed flags —
+       so /guard/evaluate and LangGraph cannot diverge.
 
-    retrieved_chunk_ids are preferred for the required-evidence presence check;
-    falls back to request.context_refs when not supplied.
-
-    Independent LLM judges (injection / evidence / entailment) run concurrently
-    when more than one is needed. Deterministic hard blocks (disallowed /
-    not-allowed tools) skip judges entirely.
+    Learned-rule hits hard-block and skip the evidence/entailment thread pool.
+    High-severity proposals are scheduled after the decision (BackgroundTasks
+    when schedule_learning is provided); they never alter this decision.
     """
     t0 = time.perf_counter()
     timings: dict[str, float] = {} if stage_timings_ms is None else stage_timings_ms
@@ -122,6 +155,76 @@ def evaluate_tool_call(
         )
         return decision
 
+    texts_for_gate = list(retrieved_texts or context_chunks or [])
+    learned_started = time.perf_counter()
+    learned_flags = injection_guard.check_learned_rules(request.process, texts_for_gate)
+    learned_ms = round((time.perf_counter() - learned_started) * 1000, 2)
+    if learned_flags:
+        rule_id = learned_flags[0].rule_id or "unknown"
+        decision = GatewayDecision(
+            call_id=request.call_id,
+            decision="block",
+            reason=f"Blocked by learned injection rule {rule_id}",
+            policy_refs=[f"learned_rule:{rule_id}"],
+            risk_score=100,
+            confidence_score=0.0,
+            evidence_score=0.0,
+        )
+        timings["injection_ms"] = learned_ms
+        timings["evidence_ms"] = 0.0
+        timings["entailment_ms"] = 0.0
+        timings["total_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+        empty_entailment = PolicyEntailmentResult(
+            compliant=True, violated_clauses=[], severity="none"
+        )
+        _append_audits(
+            audit,
+            [
+                AppendInput(
+                    process=request.process,
+                    step_id=request.step_id,
+                    event_type="injection_flag",
+                    payload={
+                        "call_id": request.call_id,
+                        "case_id": request.case_id,
+                        "flags": [f.model_dump() for f in learned_flags],
+                        "learned_rule_hit": True,
+                    },
+                ),
+                AppendInput(
+                    process=request.process,
+                    step_id=request.step_id,
+                    event_type="policy_check",
+                    payload={
+                        "call_id": request.call_id,
+                        "case_id": request.case_id,
+                        "reason": decision.reason,
+                        "policy_refs": decision.policy_refs,
+                        "unsupported_claims": [],
+                        "entailment": empty_entailment.model_dump(),
+                        "missing_evidence_docs": [],
+                        "early_learned_rule_block": True,
+                        "stage_timings_ms": dict(timings),
+                    },
+                    scores=decision,
+                ),
+                AppendInput(
+                    process=request.process,
+                    step_id=request.step_id,
+                    event_type="tool_call",
+                    payload={
+                        "call_id": request.call_id,
+                        "case_id": request.case_id,
+                        "tool_name": request.tool_name,
+                        "tool_args": request.tool_args,
+                        "decision": decision.decision,
+                    },
+                    scores=decision,
+                ),
+            ],
+        )
+        return decision
+
     chunks = context_chunks if context_chunks is not None else (retrieved_texts or [])
     chunk_ids = (
         list(retrieved_chunk_ids)
@@ -138,7 +241,9 @@ def evaluate_tool_call(
         if injection_flags is not None:
             flags = list(injection_flags)
         elif retrieved_texts:
-            flags = list(injection_guard.scan(retrieved_texts).flags)
+            flags = list(
+                injection_guard.scan(retrieved_texts, process=request.process).flags
+            )
         else:
             flags = []
         return flags, round((time.perf_counter() - started) * 1000, 2)
@@ -179,7 +284,7 @@ def evaluate_tool_call(
         verification, ver_ms = _run_evidence()
         entailment, ent_ms = _run_entailment()
 
-    timings["injection_ms"] = inj_ms
+    timings["injection_ms"] = inj_ms + learned_ms
     timings["evidence_ms"] = ver_ms
     timings["entailment_ms"] = ent_ms
 
@@ -264,5 +369,14 @@ def evaluate_tool_call(
         )
     )
     _append_audits(audit, audit_entries)
+
+    _schedule_learning(
+        schedule=schedule_learning,
+        request=request,
+        decision=decision,
+        flags=all_flags,
+        audit=audit,
+        case_store=case_store,
+    )
 
     return decision

@@ -140,10 +140,17 @@ export async function listApprovals(): Promise<Approval[]> {
   return body.approvals ?? []
 }
 
-export function approve(callId: string, action: 'approve' | 'reject', actor: string): Promise<CaseRecord> {
+export function approve(
+  callId: string,
+  action: 'approve' | 'reject',
+  actor: string,
+  ruleText?: string | null,
+): Promise<CaseRecord> {
+  const body: Record<string, string> = { action, actor }
+  if (ruleText != null && ruleText !== '') body.rule_text = ruleText
   return request(`/approvals/${encodeURIComponent(callId)}`, {
     method: 'POST',
-    body: JSON.stringify({ action, actor }),
+    body: JSON.stringify(body),
   })
 }
 

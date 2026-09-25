@@ -1,4 +1,4 @@
-"""Injection guard — regex fast path plus optional semantic LLM classifier."""
+"""Injection guard — learned literals, regex fast path, optional LLM classifier."""
 
 from __future__ import annotations
 
@@ -57,6 +57,32 @@ def _normalize_texts(text: str | None | list[str | None]) -> list[str]:
     if isinstance(text, str):
         return [text] if text else []
     return [t for t in text if t]
+
+
+def _scan_learned(process: str | None, texts: list[str]) -> list[InjectionFlag]:
+    if not process or not texts:
+        return []
+    from guardrails.rule_store import get_rule_store
+
+    flags: list[InjectionFlag] = []
+    for compiled, span in get_rule_store().match_texts(process, texts):
+        flags.append(
+            InjectionFlag(
+                pattern_id=f"learned:{compiled.rule_id}",
+                snippet=_snippet(span, 0, len(span)) if span else compiled.rule_text,
+                severity="high",
+                rule_id=compiled.rule_id,
+            )
+        )
+    return flags
+
+
+def check_learned_rules(
+    process: str | None,
+    texts: list[str] | None,
+) -> list[InjectionFlag]:
+    """Cache-backed learned-literal gate used by evaluate even when flags are precomputed."""
+    return _scan_learned(process, _normalize_texts(texts))
 
 
 def _scan_regex(texts: list[str]) -> list[InjectionFlag]:
@@ -129,10 +155,11 @@ def _classifier_to_flag(result: InjectionClassifierResult, texts: list[str]) -> 
     if attack == "none":
         attack = "semantic_injection"
     pattern_id = f"llm:{attack}"
+    # Prefer the offending chunk text — not the classifier rationale — so
+    # policy-learning can propose a literal fingerprint that matches replays.
     snippet_src = next((t for t in texts if t.strip()), "")
     snippet = _truncate_for_llm(snippet_src)[:_SNIPPET_MAX]
-    if result.rationale:
-        # Prefer a short rationale snippet when available for audit readability.
+    if not snippet and result.rationale:
         rational_snip = result.rationale.replace("\n", " ").strip()
         if len(rational_snip) > _SNIPPET_MAX:
             rational_snip = rational_snip[: _SNIPPET_MAX - 3] + "..."
@@ -144,19 +171,25 @@ def _classifier_to_flag(result: InjectionClassifierResult, texts: list[str]) -> 
     )
 
 
-def scan(text: str | None | list[str | None] = None) -> InjectionScanResult:
+def scan(
+    text: str | None | list[str | None] = None,
+    *,
+    process: str | None = None,
+) -> InjectionScanResult:
     """Scan text(s) for injection patterns.
 
-    Fast path: deterministic regex over known high/medium patterns.
-    Second stage (only when OPENAI_API_KEY is set): if regex is clean or only
-    medium, run a short batched LLM classifier. High-severity regex matches
-    short-circuit without calling the LLM.
+    Order: learned literals (process-scoped) → builtin regex → optional LLM.
+    High-severity regex/learned matches short-circuit without calling the LLM.
 
-    Offline / CI (no key): regex only — same deterministic behavior as before.
+    Offline / CI (no key): regex + learned only — deterministic.
     """
     texts = _normalize_texts(text)
     if not texts:
         return InjectionScanResult(flags=[], trust="none")
+
+    learned_flags = _scan_learned(process, texts)
+    if learned_flags:
+        return InjectionScanResult(flags=learned_flags, trust="untrusted")
 
     regex_flags = _scan_regex(texts)
     if _has_high(regex_flags):

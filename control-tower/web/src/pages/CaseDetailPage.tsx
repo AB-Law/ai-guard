@@ -62,10 +62,29 @@ export function CaseDetailPage() {
         </div>
         <div className="flex items-center gap-2.5 text-xs text-text-secondary">
           <Badge tone="accent">{kase.process}</Badge>
+          {kase.origin === 'policy_change' && <Badge tone="warning">Policy change</Badge>}
         </div>
       </div>
 
       <div className="flex flex-1 flex-col gap-[22px] overflow-y-auto px-4 py-5 sm:px-6 lg:px-8 lg:py-[26px]">
+        {kase.origin === 'policy_change' && (
+          <Card className="flex flex-col gap-2 px-[22px] py-[18px]">
+            <div className="text-[13px] font-bold text-text-secondary">Proposed learned rule</div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <Field label="Rule text" value={String(kase.request?.rule_text ?? '—')} mono />
+              <Field label="Incident" value={String(kase.request?.source_incident_id ?? '—')} mono />
+              <Field
+                label="Span preview"
+                value={String(kase.request?.matched_span_preview ?? '—')}
+              />
+            </div>
+            {typeof kase.request?.matched_span_hash === 'string' && (
+              <div className="font-mono text-[11px] text-text-muted">
+                {kase.request.matched_span_hash}
+              </div>
+            )}
+          </Card>
+        )}
         <Card className="grid grid-cols-2 gap-[18px] px-[22px] py-[18px] sm:grid-cols-3 lg:grid-cols-5">
           <Field label="Source app" value={kase.source_app ?? '—'} />
           <Field label="Process" value={kase.process} mono />
@@ -74,7 +93,9 @@ export function CaseDetailPage() {
             value={
               String(
                 (entries.find((e) => e.event_type === 'tool_call')?.payload as { tool_name?: string } | undefined)
-                  ?.tool_name ?? '—',
+                  ?.tool_name ??
+                  (kase.request as { tool_name?: string } | null)?.tool_name ??
+                  '—',
               )
             }
             mono

@@ -10,6 +10,9 @@ export type AuditEventType =
   | 'policy_check'
   | 'approval'
   | 'injection_flag'
+  | 'incident'
+  | 'rule_proposed'
+  | 'rule_applied'
 
 export interface GatewayDecision {
   call_id: string
@@ -45,6 +48,7 @@ export interface CaseRecord {
   request: Record<string, unknown> | null
   source_app: string | null
   created_at: string
+  origin?: string | null
 }
 
 export interface TrafficRow {
@@ -141,6 +145,7 @@ export interface Approval {
   call_id: string
   case_id: string
   process: string
+  origin?: string | null
   tool_name: string | null
   reason: string | null
   risk_score: number | null
@@ -149,4 +154,9 @@ export interface Approval {
   policy_refs: string[]
   source_app: string | null
   requested_at: string
+  rule_id?: string | null
+  rule_text?: string | null
+  matched_span_preview?: string | null
+  matched_span_hash?: string | null
+  source_incident_id?: string | null
 }

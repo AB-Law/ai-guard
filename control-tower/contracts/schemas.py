@@ -33,7 +33,13 @@ AuditEventType = Literal[
     "policy_check",
     "approval",
     "injection_flag",
+    "incident",
+    "rule_proposed",
+    "rule_applied",
 ]
+LearnedRuleType = Literal["literal"]
+LearnedRuleStatus = Literal["pending", "active", "rejected"]
+DetectionPath = Literal["regex", "llm", "learned"]
 
 
 class GatewayDecision(BaseModel):
@@ -65,6 +71,7 @@ class InjectionFlag(BaseModel):
     pattern_id: str
     snippet: str
     severity: InjectionSeverity
+    rule_id: str | None = None
 
 
 class InjectionScanResult(BaseModel):
@@ -79,6 +86,37 @@ class InjectionClassifierResult(BaseModel):
     severity: InjectionSeverity = "medium"
     attack_type: str = "none"
     rationale: str = ""
+
+
+class IncidentEvent(BaseModel):
+    """Structured injection incident recorded on the audit_log chain."""
+
+    incident_id: str
+    process_id: str
+    case_id: str | None = None
+    call_id: str
+    matched_pattern: str
+    matched_span_preview: str
+    matched_span_hash: str
+    tool_name: str
+    gateway_decision: GatewayDecisionLiteral
+    detection_path: DetectionPath
+    attack_category: str | None = None
+    source_rule_id: str | None = None
+
+
+class LearnedRule(BaseModel):
+    rule_id: str
+    process_id: str
+    rule_type: LearnedRuleType = "literal"
+    rule_text: str
+    rule_text_hash: str
+    status: LearnedRuleStatus
+    source_incident_id: str
+    approved_by: str | None = None
+    created_at: str
+    activated_at: str | None = None
+    rejected_at: str | None = None
 
 
 class VerificationResult(BaseModel):

@@ -33,6 +33,16 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 CREATE INDEX IF NOT EXISTS idx_audit_process ON audit_log(process);
 CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_log(event_type);
+
+CREATE TABLE IF NOT EXISTS incidents (
+    incident_id TEXT PRIMARY KEY,
+    entry_id TEXT NOT NULL,
+    process_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_incidents_process ON incidents(process_id);
+CREATE INDEX IF NOT EXISTS idx_incidents_entry ON incidents(entry_id);
 """
 
 
@@ -75,7 +85,11 @@ class PostgresAuditLogStore:
         return entries[0]
 
     def append_many(self, entries: list[AppendInput]) -> list[AuditLogEntry]:
-        """Append multiple events in one connection/transaction (hash chain order preserved)."""
+        """Append multiple events in one connection/transaction (hash chain order preserved).
+
+        Locks the tip row (or takes an advisory lock when empty) so concurrent
+        writers cannot fork prev_hash.
+        """
         if not entries:
             return []
 
@@ -84,7 +98,12 @@ class PostgresAuditLogStore:
 
         results: list[AuditLogEntry] = []
         with self._connect() as conn:
-            prev_hash = self._last_entry_hash(conn)
+            # Serialize tip updates across workers.
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (87201401,))
+            tip = conn.execute(
+                "SELECT entry_hash FROM audit_log ORDER BY rowid DESC LIMIT 1 FOR UPDATE"
+            ).fetchone()
+            prev_hash = tip["entry_hash"] if tip else GENESIS_PREV_HASH
             for entry in entries:
                 redacted_payload = redact_payload(entry.payload)
                 timestamp = entry.timestamp or datetime.now(UTC).isoformat()
@@ -127,6 +146,31 @@ class PostgresAuditLogStore:
                 prev_hash = entry_hash
             conn.commit()
         return results
+
+    def index_incident(
+        self,
+        *,
+        incident_id: str,
+        entry_id: str,
+        process_id: str,
+        created_at: str | None = None,
+    ) -> None:
+        from datetime import datetime
+
+        ts = created_at or datetime.now(UTC).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO incidents (incident_id, entry_id, process_id, created_at)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (incident_id) DO UPDATE SET
+                    entry_id = EXCLUDED.entry_id,
+                    process_id = EXCLUDED.process_id,
+                    created_at = EXCLUDED.created_at
+                """,
+                (incident_id, entry_id, process_id, ts),
+            )
+            conn.commit()
 
     def verify_chain(self) -> bool:
         valid, _ = self.verify_chain_detailed()
