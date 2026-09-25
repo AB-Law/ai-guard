@@ -28,6 +28,8 @@ export function CaseDetailPage() {
   const injectionEntry = entries.find((e) => e.event_type === 'injection_flag')
   const policyEntry = entries.find((e) => e.event_type === 'policy_check')
   const claimEntry = entries.find((e) => e.event_type === 'output_claim')
+  const retrievalEntry = entries.find((e) => e.event_type === 'retrieval')
+  const toolCallEntry = entries.find((e) => e.event_type === 'tool_call')
 
   const gw = kase?.gateway_decision
 
@@ -145,6 +147,15 @@ export function CaseDetailPage() {
           </Card>
         )}
 
+        <EvidenceCard
+          retrievalEntry={retrievalEntry}
+          policyEntry={policyEntry}
+          claimEntry={claimEntry}
+          toolCallEntry={toolCallEntry}
+          gw={gw}
+          toolResult={kase.tool_result}
+        />
+
         <div>
           <div className="mb-2.5 text-[13px] font-bold text-text-secondary">Scores — click to see the evidence behind each one</div>
           <div className="grid grid-cols-1 items-stretch gap-3.5 sm:grid-cols-2 xl:grid-cols-[2fr_2fr_2fr_3fr]">
@@ -197,6 +208,78 @@ export function CaseDetailPage() {
         </Link>
       </div>
     </>
+  )
+}
+
+function EvidenceCard({
+  retrievalEntry,
+  policyEntry,
+  claimEntry,
+  toolCallEntry,
+  gw,
+  toolResult,
+}: {
+  retrievalEntry: AuditLogEntry | undefined
+  policyEntry: AuditLogEntry | undefined
+  claimEntry: AuditLogEntry | undefined
+  toolCallEntry: AuditLogEntry | undefined
+  gw: GatewayDecision | null | undefined
+  toolResult: Record<string, unknown> | null
+}) {
+  if (!retrievalEntry && !policyEntry && !toolCallEntry) return null
+
+  const chunks =
+    (retrievalEntry?.payload as { chunks?: { id: string; source: string; excerpt: string }[] } | undefined)
+      ?.chunks ?? []
+  const topChunk = chunks[0]
+
+  const policyPayload = policyEntry?.payload as
+    | { unsupported_claims?: string[]; entailment?: { violated_clauses?: string[] } }
+    | undefined
+  const claimText =
+    (claimEntry?.payload as { claim?: string } | undefined)?.claim ?? policyPayload?.unsupported_claims?.[0]
+  const clauses = [...(gw?.policy_refs ?? []), ...(policyPayload?.entailment?.violated_clauses ?? [])]
+
+  const toolPayload = toolCallEntry?.payload as { tool_name?: string; tool_args?: Record<string, unknown> } | undefined
+  const proposed = toolPayload
+    ? `${toolPayload.tool_name ?? '—'}(${JSON.stringify(toolPayload.tool_args ?? {})})`
+    : '—'
+  const actual = toolResult ? JSON.stringify(toolResult) : gw?.decision === 'block' ? 'Blocked — not executed' : '—'
+
+  return (
+    <Card className="flex flex-col gap-3 px-[22px] py-[18px]">
+      <div className="text-[13px] font-bold text-text-secondary">Evidence</div>
+      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+        <EvidenceField label="Retrieved document">
+          {topChunk ? `${topChunk.source} (${topChunk.id})` : 'No documents retrieved for this case.'}
+        </EvidenceField>
+        <EvidenceField label="Relevant quoted passage" mono>
+          {claimText ?? topChunk?.excerpt ?? 'No passage recorded.'}
+        </EvidenceField>
+        <EvidenceField label="Policy clause">
+          {clauses.length > 0 ? clauses.join(', ') : 'No policy clause cited.'}
+        </EvidenceField>
+        <EvidenceField label="Action proposed vs. taken" mono>
+          <span className="block truncate" title={proposed}>
+            Proposed: {proposed}
+          </span>
+          <span className="mt-0.5 block truncate" title={actual}>
+            Actual: {actual}
+          </span>
+        </EvidenceField>
+      </div>
+    </Card>
+  )
+}
+
+function EvidenceField({ label, mono, children }: { label: string; mono?: boolean; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-border-subtle bg-bg px-3 py-2.5">
+      <div className="text-[11px] font-semibold uppercase text-text-muted">{label}</div>
+      <div className={cn('mt-1 line-clamp-3 text-[12.5px] leading-relaxed text-text-secondary', mono && 'font-mono text-[11.5px]')}>
+        {children}
+      </div>
+    </div>
   )
 }
 

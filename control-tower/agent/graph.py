@@ -151,6 +151,13 @@ def build_graph(
                     "case_id": state["case_id"],
                     "query": query,
                     "chunk_ids": [c["id"] for c in chunk_dicts],
+                    # Truncated excerpts so case detail can show the retrieved
+                    # document/passage behind a decision without a second
+                    # lookup endpoint — full text lives in the knowledge base.
+                    "chunks": [
+                        {"id": c["id"], "source": c["source"], "excerpt": c["text"][:400]}
+                        for c in chunk_dicts
+                    ],
                 },
             )
         )

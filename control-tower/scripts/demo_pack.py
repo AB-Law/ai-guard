@@ -13,6 +13,7 @@ REHEARSAL_IDS: tuple[str, ...] = (
     "injection_planted",
     "unauthorized_tool",
     "high_amount_escalate",
+    "unsupported_claim",
 )
 
 # Expected gateway decisions when seeded via API (escalate not auto-resumed)
@@ -21,6 +22,7 @@ REHEARSAL_EXPECTED_DECISIONS: dict[str, set[str]] = {
     "injection_planted": {"block", "escalate"},
     "unauthorized_tool": {"block"},
     "high_amount_escalate": {"escalate"},
+    "unsupported_claim": {"escalate", "block"},
 }
 
 

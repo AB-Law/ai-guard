@@ -109,7 +109,11 @@ def evaluate_tool_call(
         decision = gateway.decide(
             request,
             config,
-            risk_score=0,
+            # A hard block is a certain, rule-based decision (disallowed or
+            # unknown tool) — score it like the learned-rule block below
+            # (max risk, zero confidence/evidence since no judges ran) so the
+            # dashboard never shows a "0/100" risk score next to a block.
+            risk_score=100,
             evidence_score=0.0,
             confidence_score=0.0,
             entailment=empty_entailment,

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { CheckCircle2, CircleAlert, Loader2, X } from 'lucide-react'
 import { PageHeader } from '../components/layout/PageHeader'
 import { Card } from '../components/ui/Card'
 import { Badge } from '../components/ui/Badge'
@@ -35,12 +36,56 @@ export function OverviewPage() {
         subtitle="Every case moving through Retrieve → Scan → Gateway → Action → Approval"
         actions={
           <Button variant="default" onClick={() => seedDemo.mutate()} disabled={seedDemo.isPending}>
+            {seedDemo.isPending && <Loader2 size={14} strokeWidth={2.5} className="animate-spin" />}
             {seedDemo.isPending ? 'Loading demo pack…' : 'Load demo pack'}
           </Button>
         }
       />
 
       <div className="flex flex-1 flex-col gap-[22px] overflow-y-auto px-4 py-5 sm:px-6 lg:px-8 lg:py-[26px]">
+        {seedDemo.isPending && (
+          <div className="flex items-center gap-2.5 rounded-xl border border-border bg-surface-2 px-[18px] py-3 text-[12.5px] font-semibold text-text-secondary">
+            <Loader2 size={16} strokeWidth={2.5} className="shrink-0 animate-spin text-accent" />
+            Seeding demo cases — running each fixture through the pipeline…
+          </div>
+        )}
+        {seedDemo.isSuccess && (
+          <div className="flex items-center gap-2.5 rounded-xl border border-success/40 bg-success-soft px-[18px] py-3 text-[12.5px] font-semibold text-success">
+            <CheckCircle2 size={16} strokeWidth={2.5} className="shrink-0" />
+            Demo pack loaded — {seedDemo.data?.cases.length ?? 0} cases seeded
+            {typeof seedDemo.data?.pending_approval_count === 'number'
+              ? `, ${seedDemo.data.pending_approval_count} awaiting approval.`
+              : '.'}
+            <button
+              onClick={() => seedDemo.reset()}
+              className="ml-auto shrink-0 text-success/70 hover:text-success"
+              aria-label="Dismiss"
+            >
+              <X size={14} strokeWidth={2.5} />
+            </button>
+          </div>
+        )}
+        {seedDemo.isError && (
+          <div className="flex items-center gap-2.5 rounded-xl border border-danger/40 bg-danger-soft px-[18px] py-3 text-[12.5px] font-semibold text-danger">
+            <CircleAlert size={16} strokeWidth={2.5} className="shrink-0" />
+            Demo pack failed to load — {seedDemo.error instanceof Error ? seedDemo.error.message : 'unknown error'}.
+            <Button
+              variant="danger-outline"
+              size="sm"
+              className="ml-auto shrink-0"
+              onClick={() => seedDemo.mutate()}
+            >
+              Retry
+            </Button>
+            <button
+              onClick={() => seedDemo.reset()}
+              className="shrink-0 text-danger/70 hover:text-danger"
+              aria-label="Dismiss"
+            >
+              <X size={14} strokeWidth={2.5} />
+            </button>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
           <Kpi label="Total cases" value={String(total)} />
           <Kpi

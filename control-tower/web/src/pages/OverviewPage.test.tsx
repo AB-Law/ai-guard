@@ -55,6 +55,53 @@ describe('OverviewPage', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /Load demo pack/i })).not.toBeDisabled(),
     )
+    await waitFor(() =>
+      expect(screen.getByText(/Demo pack loaded — 3 cases seeded/i)).toBeInTheDocument(),
+    )
+    expect(screen.getByText(/1 awaiting approval/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByText(/Demo pack loaded/i)).not.toBeInTheDocument()
+  })
+
+  it('shows demo pack error and supports retry', async () => {
+    const user = userEvent.setup()
+    let attempts = 0
+    server.use(
+      http.post('*/api/demo/seed', () => {
+        attempts += 1
+        if (attempts === 1) {
+          return HttpResponse.json({ detail: 'seed failed' }, { status: 500 })
+        }
+        return HttpResponse.json({ ok: true, cases: [], pending_approval_count: 0 })
+      }),
+    )
+    renderOverview()
+    await waitFor(() => expect(screen.getByText('CASE-ALLOW')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Load demo pack/i }))
+    await waitFor(() =>
+      expect(screen.getByText(/Demo pack failed to load/i)).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() =>
+      expect(screen.getByText(/Demo pack loaded — 0 cases seeded/i)).toBeInTheDocument(),
+    )
+  })
+
+  it('dismisses demo pack error banner', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.post('*/api/demo/seed', () =>
+        HttpResponse.json({ detail: 'boom' }, { status: 500 }),
+      ),
+    )
+    renderOverview()
+    await waitFor(() => expect(screen.getByText('CASE-ALLOW')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Load demo pack/i }))
+    await waitFor(() =>
+      expect(screen.getByText(/Demo pack failed to load/i)).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByText(/Demo pack failed to load/i)).not.toBeInTheDocument()
   })
 
   it('shows empty state', async () => {
