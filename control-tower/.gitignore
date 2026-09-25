@@ -49,6 +49,7 @@ pnpm-debug.log*
 chroma/
 .chroma/
 data/uploads/
+data/demo_agent_keys/
 
 # Streamlit secrets (keep config.toml)
 .streamlit/secrets.toml

@@ -43,3 +43,20 @@ def _isolate_openai_key(request: pytest.FixtureRequest, monkeypatch: pytest.Monk
     """
     if request.node.get_closest_marker("live") is None:
         monkeypatch.setenv("OPENAI_API_KEY", "")
+
+
+@pytest.fixture(autouse=True)
+def _test_auth_mode(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mirrors _isolate_openai_key above: api/main.py's load_dotenv() would
+    otherwise leak this repo's real DASHBOARD_PASSWORD/JWT_SECRET into every
+    test process. Most tests don't care about auth at all, so by default this
+    sets AEGIS_DISABLE_AUTH=1, which api/auth.py + api/main.py's dependencies
+    treat as "skip the check". Tests that exercise auth itself opt back in
+    with @pytest.mark.auth and set DASHBOARD_PASSWORD/JWT_SECRET themselves.
+    """
+    if request.node.get_closest_marker("auth") is None:
+        monkeypatch.setenv("AEGIS_DISABLE_AUTH", "1")
+        monkeypatch.setenv("JWT_SECRET", "")
+        monkeypatch.setenv("DASHBOARD_PASSWORD", "")
+    else:
+        monkeypatch.delenv("AEGIS_DISABLE_AUTH", raising=False)

@@ -22,6 +22,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from scripts.simulated_apps import APP_RUNNERS, DEFAULT_APPS
+from scripts.simulated_apps._keys import load_api_key
 from scripts.traffic_lib import random_submit_body
 
 _LEGACY_BUNDLE = "legacy_cases"
@@ -29,10 +30,14 @@ _LEGACY_BUNDLE = "legacy_cases"
 
 def _legacy_runner(rng: random.Random, *, api_url: str) -> str:
     """Drive procurement_review + onboarding_kyc via POST /cases."""
+    api_key = load_api_key(_LEGACY_BUNDLE)
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     for _ in range(20):
         body = random_submit_body(rng, seq=rng.randint(0, 99999))
         if body["process"] in {"procurement_review", "onboarding_kyc"}:
-            resp = httpx.post(f"{api_url.rstrip('/')}/cases", json=body, timeout=30.0)
+            resp = httpx.post(
+                f"{api_url.rstrip('/')}/cases", json=body, headers=headers, timeout=30.0
+            )
             resp.raise_for_status()
             return body["process"]
     raise RuntimeError("traffic_lib did not produce a procurement/kyc body")

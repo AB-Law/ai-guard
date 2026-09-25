@@ -13,11 +13,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from agent.graph import build_graph, initial_state, resume_case, run_case
 from agent.tools import ToolSideEffects
+from api import auth
 from api.case_store_db import build_case_store, build_kv_store
 from api.checkpointer import build_checkpointer
 from audit.backend import build_audit_store
@@ -109,6 +110,10 @@ class ApprovalBody(BaseModel):
 
 class DemoTamperBody(BaseModel):
     enable: bool = True
+
+
+class LoginBody(BaseModel):
+    password: str = Field(min_length=1)
 
 
 class CreateApplicationBody(BaseModel):
@@ -291,6 +296,23 @@ def create_app(
             **stats,
         }
 
+    def _write_demo_agent_key_file(source_app: str, api_key: str, process: str) -> None:
+        """Plaintext keys are only ever visible at creation time (the API
+        never returns key_hash), so this is a seeded app's one chance to hand
+        its key to the matching scripts/simulated_apps/<source_app>.py demo
+        script. Written per-app rather than one shared file since each demo
+        script only needs (and should only see) its own key.
+        """
+        keys_dir = root / "data" / "demo_agent_keys"
+        keys_dir.mkdir(parents=True, exist_ok=True)
+        env_path = keys_dir / f"{source_app}.env"
+        env_path.write_text(
+            f"AIGUARD_API_KEY={api_key}\n"
+            f"AIGUARD_API_URL=http://127.0.0.1:8000\n"
+            f"AIGUARD_PROCESS={process}\n",
+            encoding="utf-8",
+        )
+
     def _seed_default_applications() -> None:
         """First boot only (store empty) — registers the agents the existing
         traffic simulators already impersonate (scripts/simulated_apps/*.py),
@@ -321,8 +343,60 @@ def create_app(
                 "created_at": _utc_now(),
                 "revoked_at": None,
             }
+            _write_demo_agent_key_file(source_app, api_key, process)
 
     _seed_default_applications()
+
+    def _lookup_application_by_key(api_key: str) -> dict[str, Any] | None:
+        key_hash = _hash_key(api_key)
+        for record in app.state.applications.values():
+            if record.get("key_hash") == key_hash:
+                return record
+        return None
+
+    async def require_api_key(request: Request) -> dict[str, Any]:
+        """Agent-facing auth: Authorization: Bearer sk_... issued via
+        POST /applications. Returns the matching application record so
+        callers can bind source_app/process to the authenticated identity
+        instead of trusting whatever the request body claims.
+        """
+        if auth.auth_disabled():
+            return {"type": "api_key", "source_app": None, "process": None}
+        header = request.headers.get("authorization", "")
+        if not header.lower().startswith("bearer "):
+            raise HTTPException(status_code=401, detail="missing API key")
+        key = header[7:].strip()
+        record = _lookup_application_by_key(key)
+        if record is None:
+            raise HTTPException(status_code=401, detail="invalid API key")
+        if record.get("status") == "revoked":
+            raise HTTPException(status_code=401, detail="API key revoked")
+        return {"type": "api_key", **record}
+
+    async def require_dashboard_token(request: Request) -> dict[str, Any]:
+        """Dashboard-facing auth: Authorization: Bearer <jwt> issued via
+        POST /auth/login against the shared DASHBOARD_PASSWORD.
+        """
+        if auth.auth_disabled():
+            return {"type": "dashboard"}
+        header = request.headers.get("authorization", "")
+        if not header.lower().startswith("bearer "):
+            raise HTTPException(status_code=401, detail="missing dashboard session token")
+        payload = auth.decode_access_token(header[7:].strip())
+        return {"type": "dashboard", **payload}
+
+    async def require_dashboard_or_api_key(request: Request) -> dict[str, Any]:
+        """POST/GET /cases is used both by the dashboard (dashboard session)
+        and by agents submitting cases directly (API key) — accept either.
+        """
+        header = request.headers.get("authorization", "")
+        if header.lower().startswith("bearer sk_"):
+            return await require_api_key(request)
+        return await require_dashboard_token(request)
+
+    # Bound once so route signatures don't call Depends() in a default (ruff B008).
+    dashboard_or_api_key = Depends(require_dashboard_or_api_key)
+    api_key_required = Depends(require_api_key)
 
     def _rebuild_runtime() -> None:
         """Fresh checkpointer + side effects after demo reset (HITL threads cleared).
@@ -351,8 +425,14 @@ def create_app(
         _rebuild_runtime()
 
     @app.post("/cases")
-    def submit_case(body: SubmitCaseBody) -> dict[str, Any]:
+    def submit_case(
+        body: SubmitCaseBody,
+        caller: dict[str, Any] = dashboard_or_api_key,
+    ) -> dict[str, Any]:
         case_id = body.case_id or str(uuid.uuid4())
+        source_app = body.source_app
+        if caller.get("type") == "api_key" and caller.get("source_app"):
+            source_app = caller["source_app"]
         state = initial_state(
             case_id=case_id,
             process=body.process,
@@ -361,9 +441,9 @@ def create_app(
             force_chunk_ids=body.force_chunk_ids,
         )
         result = run_case(app.state.graph, state, thread_id=case_id)
-        return _snapshot_case(case_id, result, source_app=body.source_app)
+        return _snapshot_case(case_id, result, source_app=source_app)
 
-    @app.get("/cases")
+    @app.get("/cases", dependencies=[Depends(require_dashboard_token)])
     def list_cases() -> dict[str, Any]:
         rows = sorted(
             store.cases.values(),
@@ -372,7 +452,7 @@ def create_app(
         )
         return {"cases": list(rows)}
 
-    @app.get("/cases/{case_id}")
+    @app.get("/cases/{case_id}", dependencies=[Depends(require_dashboard_token)])
     def get_case(case_id: str) -> dict[str, Any]:
         if case_id not in store.cases:
             snap = app.state.graph.get_state({"configurable": {"thread_id": case_id}})
@@ -398,7 +478,7 @@ def create_app(
                 out.append(e)
         return out
 
-    @app.get("/cases/{case_id}/audit")
+    @app.get("/cases/{case_id}/audit", dependencies=[Depends(require_dashboard_token)])
     def get_case_audit(case_id: str) -> dict[str, Any]:
         if case_id not in store.cases:
             snap = app.state.graph.get_state({"configurable": {"thread_id": case_id}})
@@ -413,7 +493,7 @@ def create_app(
 
     _STAGE_ORDER = ("retrieval", "injection_flag", "policy_check", "tool_call", "approval")
 
-    @app.get("/traffic/recent")
+    @app.get("/traffic/recent", dependencies=[Depends(require_dashboard_token)])
     def traffic_recent(
         limit: int = 100,
         since_minutes: int | None = None,
@@ -500,7 +580,7 @@ def create_app(
             "limit": limit,
         }
 
-    @app.get("/audit/verify")
+    @app.get("/audit/verify", dependencies=[Depends(require_dashboard_token)])
     def verify_audit() -> dict[str, Any]:
         entries = app.state.audit.query()
         valid, first_invalid_entry_id = app.state.audit.verify_chain_detailed()
@@ -510,7 +590,7 @@ def create_app(
             "first_invalid_entry_id": first_invalid_entry_id,
         }
 
-    @app.post("/investigate")
+    @app.post("/investigate", dependencies=[Depends(require_dashboard_token)])
     def post_investigate(body: InvestigateBody) -> dict[str, Any]:
         all_entries = app.state.audit.query()
         if body.case_id:
@@ -531,10 +611,18 @@ def create_app(
         return result.model_dump()
 
     @app.post("/guard/evaluate")
-    def guard_evaluate(body: GuardEvaluateBody) -> dict[str, Any]:
+    def guard_evaluate(
+        body: GuardEvaluateBody,
+        caller: dict[str, Any] = api_key_required,
+    ) -> dict[str, Any]:
         """Evaluate one proposed tool call against process policy and audit it —
         the endpoint the aiguard SDK (or any external agent) calls per tool
         call, without going through /cases or the LangGraph agent at all.
+
+        Requires an application API key (POST /applications). The process
+        and source_app are taken from the authenticated application, not the
+        request body, so a caller can only evaluate against the process it
+        was actually registered for.
 
         Retrieves from the tower's own knowledge base itself (same one
         /knowledge/documents feeds) rather than relying solely on whatever
@@ -547,13 +635,15 @@ def create_app(
         top, for facts the tower's KB wouldn't otherwise know (e.g. a
         vendor-status lookup from the caller's own CRM).
         """
+        process = caller.get("process") or body.process
+        source_app = caller.get("source_app") or body.source_app
         try:
-            config = load_process(body.process)
+            config = load_process(process)
         except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         call_id = body.call_id or str(uuid.uuid4())
-        process_kb = _kb_for(body.process)
+        process_kb = _kb_for(process)
         query = " ".join(
             [
                 body.tool_name,
@@ -581,7 +671,7 @@ def create_app(
         retrieved_ids = [c.id for c in retrieved]
         request = ToolCallRequest(
             call_id=call_id,
-            process=body.process,
+            process=process,
             step_id=body.step_id,
             tool_name=body.tool_name,
             tool_args=body.tool_args,
@@ -602,7 +692,7 @@ def create_app(
         case_id = f"guard-{call_id}"
         store.cases[case_id] = {
             "case_id": case_id,
-            "process": body.process,
+            "process": process,
             "status": "completed",
             "call_id": call_id,
             "gateway_decision": decision.model_dump(),
@@ -611,13 +701,13 @@ def create_app(
                 "tool_name": body.tool_name,
                 **body.tool_args,
             },
-            "source_app": body.source_app,
+            "source_app": source_app,
             "created_at": _utc_now(),
         }
         store.call_to_case[call_id] = case_id
         return decision.model_dump()
 
-    @app.get("/approvals")
+    @app.get("/approvals", dependencies=[Depends(require_dashboard_token)])
     def list_approvals() -> dict[str, Any]:
         """Pending-approval queue as its own resource — the integration point
         for a customer's own system to poll (or later, webhook off of) rather
@@ -651,7 +741,7 @@ def create_app(
             )
         return {"approvals": out, "count": len(out)}
 
-    @app.post("/approvals/{call_id}")
+    @app.post("/approvals/{call_id}", dependencies=[Depends(require_dashboard_token)])
     def approve(call_id: str, body: ApprovalBody) -> dict[str, Any]:
         case_id = store.call_to_case.get(call_id)
         if not case_id:
@@ -670,13 +760,13 @@ def create_app(
         )
         return _snapshot_case(case_id, result)
 
-    @app.post("/demo/reset")
+    @app.post("/demo/reset", dependencies=[Depends(require_dashboard_token)])
     def demo_reset() -> dict[str, Any]:
         """Wipe audit rows + in-memory cases; rebuild checkpointer for a clean demo."""
         _reset_demo_state()
         return {"ok": True, "cases": 0, "audit_entries": 0}
 
-    @app.post("/demo/seed")
+    @app.post("/demo/seed", dependencies=[Depends(require_dashboard_token)])
     def demo_seed() -> dict[str, Any]:
         """Reset runtime and load rehearsal fixtures via /cases (escalate left pending)."""
         _reset_demo_state()
@@ -702,7 +792,7 @@ def create_app(
             "pending_approval_count": pending,
         }
 
-    @app.post("/knowledge/documents")
+    @app.post("/knowledge/documents", dependencies=[Depends(require_dashboard_token)])
     async def upload_document(
         file: UploadFile,
         process: str = Form(...),
@@ -753,7 +843,7 @@ def create_app(
             "process": process,
         }
 
-    @app.get("/configs")
+    @app.get("/configs", dependencies=[Depends(require_dashboard_token)])
     def list_configs() -> dict[str, Any]:
         """Real process configs, parsed from configs/*.yaml — the same file
         the gateway enforces against, not a client-side copy of it. Doc lists
@@ -783,7 +873,7 @@ def create_app(
             )
         return {"processes": out}
 
-    @app.post("/applications")
+    @app.post("/applications", dependencies=[Depends(require_dashboard_token)])
     def create_application(body: CreateApplicationBody) -> dict[str, Any]:
         if body.process not in KNOWN_PROCESSES:
             raise HTTPException(status_code=400, detail=f"unknown process {body.process!r}")
@@ -810,7 +900,7 @@ def create_app(
         view["api_key"] = api_key
         return view
 
-    @app.get("/applications")
+    @app.get("/applications", dependencies=[Depends(require_dashboard_token)])
     def list_applications() -> dict[str, Any]:
         records = sorted(
             app.state.applications.values(),
@@ -819,7 +909,7 @@ def create_app(
         )
         return {"applications": [_application_view(r) for r in records]}
 
-    @app.post("/applications/{app_id}/revoke")
+    @app.post("/applications/{app_id}/revoke", dependencies=[Depends(require_dashboard_token)])
     def revoke_application(app_id: str) -> dict[str, Any]:
         record = app.state.applications.get(app_id)
         if record is None:
@@ -830,7 +920,7 @@ def create_app(
         app.state.applications[app_id] = record
         return _application_view(record)
 
-    @app.get("/audit/entries")
+    @app.get("/audit/entries", dependencies=[Depends(require_dashboard_token)])
     def list_audit_entries(
         limit: int = 100,
         offset: int = 0,
@@ -856,7 +946,7 @@ def create_app(
             "offset": offset,
         }
 
-    @app.post("/audit/demo-tamper")
+    @app.post("/audit/demo-tamper", dependencies=[Depends(require_dashboard_token)])
     def demo_tamper(body: DemoTamperBody) -> dict[str, Any]:
         """Debug/demo only — genuinely corrupts one stored hash (not a UI
         simulation) so /audit/verify authentically fails, then restores it.
@@ -881,6 +971,19 @@ def create_app(
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.post("/auth/login")
+    def login(body: LoginBody) -> dict[str, str]:
+        expected = os.environ.get("DASHBOARD_PASSWORD")
+        if not expected:
+            raise HTTPException(
+                status_code=500,
+                detail="DASHBOARD_PASSWORD is not configured on the server.",
+            )
+        if not secrets.compare_digest(body.password, expected):
+            raise HTTPException(status_code=401, detail="invalid password")
+        token = auth.create_access_token("dashboard")
+        return {"access_token": token, "token_type": "bearer"}
 
     return app
 
