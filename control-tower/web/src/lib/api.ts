@@ -171,6 +171,63 @@ export interface CreateProcessInput {
   approval_threshold?: number
 }
 
+/** Full ProcessConfig payload for POST /processes (schema-driven wizard). */
+export interface ProcessConfigPayload {
+  process: string
+  title?: string | null
+  allowed_tools: ProcessToolInput[]
+  disallowed_tools: string[]
+  required_evidence_docs: string[]
+  approval_threshold: { risk_score_gte: number }
+  knowledge_base_paths: string[]
+}
+
+export interface FieldError {
+  loc: (string | number)[]
+  msg: string
+  type: string
+}
+
+export class ProcessValidationError extends Error {
+  readonly errors: FieldError[]
+  constructor(errors: FieldError[], status = 422) {
+    super(errors[0]?.msg ?? `POST /processes failed: ${status}`)
+    this.name = 'ProcessValidationError'
+    this.errors = errors
+    Object.setPrototypeOf(this, new.target.prototype)
+  }
+}
+
+export function getProcessSchema(): Promise<Record<string, unknown>> {
+  return request('/processes/schema')
+}
+
+export async function createProcessFromSchema(input: ProcessConfigPayload): Promise<ProcessConfig> {
+  const res = await fetch(`${BASE}/processes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(input),
+  })
+  if (res.status === 401) {
+    setToken(null)
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+  }
+  if (!res.ok) {
+    let parsed: { detail?: FieldError[] } | null = null
+    const text = await res.text().catch(() => '')
+    try {
+      parsed = JSON.parse(text) as { detail?: FieldError[] }
+    } catch {
+      parsed = null
+    }
+    if (res.status === 422 && Array.isArray(parsed?.detail)) {
+      throw new ProcessValidationError(parsed.detail, 422)
+    }
+    throw new Error(`POST /processes failed: ${res.status} ${text}`)
+  }
+  return res.json() as Promise<ProcessConfig>
+}
+
 export function createProcess(input: CreateProcessInput): Promise<ProcessConfig> {
   return request('/configs', { method: 'POST', body: JSON.stringify(input) })
 }

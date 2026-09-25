@@ -15,6 +15,11 @@ _EVIDENCE_DOC_PREFIXES: dict[str, tuple[str, ...]] = {
 }
 
 
+def known_evidence_doc_types() -> tuple[str, ...]:
+    """Registered evidence-doc labels the process wizard / schema admits."""
+    return tuple(sorted(_EVIDENCE_DOC_PREFIXES))
+
+
 def _doc_present(doc_id: str, chunk_ids: list[str]) -> bool:
     prefixes = _EVIDENCE_DOC_PREFIXES.get(doc_id)
     if prefixes is None:

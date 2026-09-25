@@ -4,7 +4,15 @@ import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { ToolsEditor, type ToolsValue } from './ToolsEditor'
 
-function Harness({ initial, onChange }: { initial: ToolsValue; onChange?: (v: ToolsValue) => void }) {
+function Harness({
+  initial,
+  onChange,
+  evidenceDocOptions,
+}: {
+  initial: ToolsValue
+  onChange?: (v: ToolsValue) => void
+  evidenceDocOptions?: string[]
+}) {
   const [value, setValue] = useState(initial)
   return (
     <ToolsEditor
@@ -13,6 +21,7 @@ function Harness({ initial, onChange }: { initial: ToolsValue; onChange?: (v: To
         setValue(next)
         onChange?.(next)
       }}
+      evidenceDocOptions={evidenceDocOptions}
     />
   )
 }
@@ -76,12 +85,19 @@ describe('ToolsEditor', () => {
     )
   })
 
-  it('updates the approval threshold', async () => {
+  it('toggles required evidence docs when options are provided', async () => {
     const user = userEvent.setup()
-    render(<Harness initial={withTool} />)
-    const threshold = screen.getByDisplayValue('60')
-    await user.clear(threshold)
-    await user.type(threshold, '85')
-    expect(screen.getByDisplayValue('85')).toBeInTheDocument()
+    const onChange = vi.fn()
+    render(
+      <Harness
+        initial={{ ...withTool, requiredEvidenceDocs: [] }}
+        onChange={onChange}
+        evidenceDocOptions={['finance_policy', 'kyc_policy']}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: 'finance_policy' }))
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredEvidenceDocs: ['finance_policy'] }),
+    )
   })
 })
