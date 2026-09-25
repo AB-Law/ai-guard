@@ -192,7 +192,12 @@ pytest tests/unit tests/contract -q                              # Phase 1
 pytest tests/unit tests/contract tests/integration -q            # Phase 2
 pytest tests/unit tests/contract tests/integration tests/e2e -q -m "not live"   # Phase 3+
 
-# Live suite (requires OPENAI_API_KEY in .env) — pre-demo only
+# Offline policy-entailment consistency gate (also part of default pytest / CI)
+# 20 labeled cases × N=3 stubbed runs; fails if gold-label agreement < 95%
+# or if POLICY_ENTAILMENT_RUBRIC.md is not injected as the system prompt.
+pytest tests/eval/test_policy_entailment_consistency.py -q
+
+# Live suite (requires OPENAI_API_KEY in .env) — pre-demo only; not used by CI
 pytest -q -m live
 
 # Coverage (guardrails + audit must stay >= 80%)
@@ -204,7 +209,8 @@ pytest -q --cov=guardrails --cov=audit --cov-report=term-missing
 ```
 control-tower/
 ├── agent/            # LangGraph agent: retrieve -> scan_injection -> reason -> propose_tool -> gateway_check -> execute/interrupt -> finalize
-├── guardrails/        # Injection guard, tool-call gateway, output verifier, risk scorer
+├── guardrails/        # Injection guard, tool-call gateway, output verifier, risk scorer, policy entailment
+│   └── POLICY_ENTAILMENT_RUBRIC.md  # Fixed system-prompt rubric (violation / borderline / compliant)
 ├── audit/            # Hash-chained SQLite audit log + PII redaction
 ├── contracts/         # Shared Pydantic schemas (ToolCallRequest, GatewayDecision, AuditLogEntry)
 ├── knowledge/         # RAG over policy/vendor docs (Chroma)
@@ -216,5 +222,5 @@ control-tower/
 ├── scripts/            # run_scenario.py, demo_seed.py, verify_audit_chain.py, traffic_sim.py/traffic_lib.py
 ├── sdk/aiguard/        # separate installable package — see sdk/aiguard/README.md
 ├── Dockerfile, docker-compose.yml  # api + dashboard + Postgres, see "Storage backends"
-└── tests/              # unit / contract / integration / e2e + fixtures
+└── tests/              # unit / contract / integration / e2e / eval + fixtures
 ```
