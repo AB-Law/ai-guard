@@ -182,11 +182,13 @@ def test_llm_judge_does_not_short_circuit_when_only_request_facts_are_present() 
     fake_result = VerificationResult(evidence_score=1.0, unsupported_claims=[])
     mock_llm = MagicMock()
     mock_llm.with_structured_output.return_value.invoke.return_value = fake_result
-    with patch("guardrails.llm.get_chat_openai", return_value=mock_llm) as mock_get:
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-not-real"}):
-            result = _llm_judge(
-                "The amount is 2500.", [], request_facts={"vendor_id": "V-1001", "amount": 2500}
-            )
+    with (
+        patch("guardrails.llm.get_chat_openai", return_value=mock_llm) as mock_get,
+        patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-not-real"}),
+    ):
+        result = _llm_judge(
+            "The amount is 2500.", [], request_facts={"vendor_id": "V-1001", "amount": 2500}
+        )
     mock_get.assert_called_once()
     assert result.evidence_score == 1.0
 
@@ -205,12 +207,14 @@ def test_llm_judge_prompt_includes_request_facts() -> None:
 
     mock_llm = MagicMock()
     mock_llm.with_structured_output.return_value.invoke.side_effect = _capture_invoke
-    with patch("guardrails.llm.get_chat_openai", return_value=mock_llm):
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-not-real"}):
-            _llm_judge(
-                "The amount is 2500.",
-                ["some policy chunk"],
-                request_facts={"vendor_id": "V-1001", "amount": 2500},
-            )
+    with (
+        patch("guardrails.llm.get_chat_openai", return_value=mock_llm),
+        patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-not-real"}),
+    ):
+        _llm_judge(
+            "The amount is 2500.",
+            ["some policy chunk"],
+            request_facts={"vendor_id": "V-1001", "amount": 2500},
+        )
     assert "vendor_id=V-1001" in captured_prompt["value"]
     assert "amount=2500" in captured_prompt["value"]
