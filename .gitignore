@@ -63,3 +63,7 @@ Desktop.ini
 .cursor/
 *.swp
 *~
+control-tower/.claude/launch.json
+.claude/launch.json
+control-tower/data/checkpoints.db-shm
+control-tower/data/checkpoints.db-wal

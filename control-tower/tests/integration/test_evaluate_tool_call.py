@@ -357,17 +357,17 @@ def test_independent_judges_run_concurrently(
     config = load_process("procurement_review")
     delay = 0.08
 
-    def _slow_scan(texts):  # noqa: ANN001
+    def _slow_scan(texts):
         time.sleep(delay)
         from contracts.schemas import InjectionScanResult
 
         return InjectionScanResult(flags=[], trust="none")
 
-    def _slow_verify(*_a, **_k):  # noqa: ANN001
+    def _slow_verify(*_a, **_k):
         time.sleep(delay)
         return VerificationResult(evidence_score=1.0, unsupported_claims=[])
 
-    def _slow_entail(*_a, **_k):  # noqa: ANN001
+    def _slow_entail(*_a, **_k):
         time.sleep(delay)
         return PolicyEntailmentResult(compliant=True, violated_clauses=[], severity="none")
 

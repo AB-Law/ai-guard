@@ -7,7 +7,7 @@ entirely on the tower side, this just asks it questions per tool call.
 from __future__ import annotations
 
 import time
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 import httpx
 
@@ -31,7 +31,7 @@ class GuardClient:
     def close(self) -> None:
         self._http.close()
 
-    def __enter__(self) -> GuardClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:
