@@ -394,6 +394,10 @@ def create_app(
             return await require_api_key(request)
         return await require_dashboard_token(request)
 
+    # Bound once so route signatures don't call Depends() in a default (ruff B008).
+    dashboard_or_api_key = Depends(require_dashboard_or_api_key)
+    api_key_required = Depends(require_api_key)
+
     def _rebuild_runtime() -> None:
         """Fresh checkpointer + side effects after demo reset (HITL threads cleared).
 
@@ -423,7 +427,7 @@ def create_app(
     @app.post("/cases")
     def submit_case(
         body: SubmitCaseBody,
-        caller: dict[str, Any] = Depends(require_dashboard_or_api_key),
+        caller: dict[str, Any] = dashboard_or_api_key,
     ) -> dict[str, Any]:
         case_id = body.case_id or str(uuid.uuid4())
         source_app = body.source_app
@@ -609,7 +613,7 @@ def create_app(
     @app.post("/guard/evaluate")
     def guard_evaluate(
         body: GuardEvaluateBody,
-        caller: dict[str, Any] = Depends(require_api_key),
+        caller: dict[str, Any] = api_key_required,
     ) -> dict[str, Any]:
         """Evaluate one proposed tool call against process policy and audit it —
         the endpoint the aiguard SDK (or any external agent) calls per tool
