@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import httpx
 import streamlit as st
 
 from dashboard.api_client import AegisApiClient
@@ -323,7 +324,49 @@ def _traffic_event_dialog(client: AegisApiClient, case_id: str) -> None:
         st.rerun(scope="app")
 
 
+def _login_view(api_url: str) -> None:
+    st.set_page_config(page_title="Aegis Control Tower — Sign in", layout="centered")
+    inject_css()
+    st.title("Aegis Control Tower")
+    st.caption("Sign in to continue.")
+    with st.form("login_form"):
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button(
+            "Sign in", type="primary", use_container_width=True
+        )
+    if submitted:
+        try:
+            token = AegisApiClient(api_url).login(password)
+        except httpx.HTTPStatusError as exc:
+            if exc.response is not None and exc.response.status_code == 401:
+                st.error("Incorrect password.")
+            else:
+                st.error(f"Sign-in failed: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Sign-in failed: {exc}")
+        else:
+            st.session_state["auth_token"] = token
+            st.rerun()
+
+
 def main() -> None:
+    api_url = os.environ.get("AEGIS_API_URL", DEFAULT_API_URL)
+    if not st.session_state.get("auth_token"):
+        _login_view(api_url)
+        st.stop()
+
+    try:
+        _render_dashboard()
+    except httpx.HTTPStatusError as exc:
+        if exc.response is not None and exc.response.status_code == 401:
+            st.session_state.pop("auth_token", None)
+            st.warning("Session expired — please sign in again.")
+            st.rerun()
+        else:
+            raise
+
+
+def _render_dashboard() -> None:
     st.set_page_config(
         page_title="Aegis Control Tower",
         layout="wide",
@@ -334,8 +377,11 @@ def main() -> None:
     with st.sidebar:
         st.header("Connection")
         api_url = st.text_input("API base URL", value=DEFAULT_API_URL)
-        client = AegisApiClient(api_url)
+        client = AegisApiClient(api_url, token=st.session_state.get("auth_token"))
         actor = st.text_input("Approver actor", value="dashboard_user")
+        if st.button("Sign out", use_container_width=True):
+            st.session_state.pop("auth_token", None)
+            st.rerun()
         cols = st.columns(2)
         if cols[0].button("Refresh", type="primary", use_container_width=True):
             st.rerun()

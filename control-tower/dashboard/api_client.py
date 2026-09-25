@@ -8,12 +8,29 @@ import httpx
 
 
 class AegisApiClient:
-    def __init__(self, base_url: str, *, timeout: float = 30.0) -> None:
+    def __init__(
+        self, base_url: str, *, timeout: float = 30.0, token: str | None = None
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.token = token
 
     def _url(self, path: str) -> str:
         return f"{self.base_url}{path}"
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
+
+    def login(self, password: str) -> str:
+        """POST /auth/login — exchanges the shared dashboard password for a
+        session token. Raises on a wrong password (401) same as any other
+        failed call; callers show that to the user rather than the token.
+        """
+        resp = httpx.post(
+            self._url("/auth/login"), json={"password": password}, timeout=self.timeout
+        )
+        resp.raise_for_status()
+        return resp.json()["access_token"]
 
     def health(self) -> dict[str, Any]:
         resp = httpx.get(self._url("/health"), timeout=self.timeout)
@@ -21,22 +38,32 @@ class AegisApiClient:
         return resp.json()
 
     def list_cases(self) -> list[dict[str, Any]]:
-        resp = httpx.get(self._url("/cases"), timeout=self.timeout)
+        resp = httpx.get(
+            self._url("/cases"), headers=self._headers(), timeout=self.timeout
+        )
         resp.raise_for_status()
         return list(resp.json().get("cases") or [])
 
     def get_case(self, case_id: str) -> dict[str, Any]:
-        resp = httpx.get(self._url(f"/cases/{case_id}"), timeout=self.timeout)
+        resp = httpx.get(
+            self._url(f"/cases/{case_id}"), headers=self._headers(), timeout=self.timeout
+        )
         resp.raise_for_status()
         return resp.json()
 
     def get_audit(self, case_id: str) -> dict[str, Any]:
-        resp = httpx.get(self._url(f"/cases/{case_id}/audit"), timeout=self.timeout)
+        resp = httpx.get(
+            self._url(f"/cases/{case_id}/audit"),
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
         resp.raise_for_status()
         return resp.json()
 
     def verify_audit(self) -> dict[str, Any]:
-        resp = httpx.get(self._url("/audit/verify"), timeout=self.timeout)
+        resp = httpx.get(
+            self._url("/audit/verify"), headers=self._headers(), timeout=self.timeout
+        )
         resp.raise_for_status()
         return resp.json()
 
@@ -59,18 +86,29 @@ class AegisApiClient:
             payload["case_id"] = case_id
         if source_app is not None:
             payload["source_app"] = source_app
-        resp = httpx.post(self._url("/cases"), json=payload, timeout=self.timeout)
+        resp = httpx.post(
+            self._url("/cases"),
+            json=payload,
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
         resp.raise_for_status()
         return resp.json()
 
     def seed_demo(self) -> dict[str, Any]:
         """POST /demo/seed — reset + load rehearsal pack (escalate left pending)."""
-        resp = httpx.post(self._url("/demo/seed"), timeout=max(self.timeout, 60.0))
+        resp = httpx.post(
+            self._url("/demo/seed"),
+            headers=self._headers(),
+            timeout=max(self.timeout, 60.0),
+        )
         resp.raise_for_status()
         return resp.json()
 
     def reset_demo(self) -> dict[str, Any]:
-        resp = httpx.post(self._url("/demo/reset"), timeout=self.timeout)
+        resp = httpx.post(
+            self._url("/demo/reset"), headers=self._headers(), timeout=self.timeout
+        )
         resp.raise_for_status()
         return resp.json()
 
@@ -89,6 +127,7 @@ class AegisApiClient:
         resp = httpx.post(
             self._url("/investigate"),
             json=payload,
+            headers=self._headers(),
             timeout=self.timeout,
         )
         resp.raise_for_status()
@@ -111,7 +150,10 @@ class AegisApiClient:
         if decision:
             params["decision"] = decision
         resp = httpx.get(
-            self._url("/traffic/recent"), params=params, timeout=self.timeout
+            self._url("/traffic/recent"),
+            params=params,
+            headers=self._headers(),
+            timeout=self.timeout,
         )
         resp.raise_for_status()
         body = resp.json()
@@ -135,6 +177,7 @@ class AegisApiClient:
             self._url("/knowledge/documents"),
             files={"file": (filename, content)},
             data={"process": process},
+            headers=self._headers(),
             timeout=max(self.timeout, 30.0),
         )
         resp.raise_for_status()
@@ -144,6 +187,7 @@ class AegisApiClient:
         resp = httpx.post(
             self._url(f"/approvals/{call_id}"),
             json={"action": action, "actor": actor},
+            headers=self._headers(),
             timeout=self.timeout,
         )
         resp.raise_for_status()

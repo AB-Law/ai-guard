@@ -8,6 +8,8 @@ from pathlib import Path
 import aiguard
 from aiguard.exceptions import AiGuardBlocked, AiGuardEscalated
 
+from scripts.simulated_apps._keys import load_api_key
+
 _ROOT = Path(__file__).resolve().parents[2]
 _INJECTED = (_ROOT / "data" / "rag_injected_scope.txt").read_text(encoding="utf-8")
 
@@ -33,7 +35,12 @@ _PROFILE_WEIGHTS = {
 
 
 def _configure(api_url: str) -> None:
-    aiguard.configure(api_url=api_url, process="rag_bot", source_app="rag_bot_app")
+    aiguard.configure(
+        api_url=api_url,
+        process="rag_bot",
+        source_app="rag_bot_app",
+        api_key=load_api_key("rag_bot_app"),
+    )
 
 
 @aiguard.guard(

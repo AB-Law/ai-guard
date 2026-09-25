@@ -13,6 +13,8 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
+from scripts.simulated_apps._keys import load_api_key
+
 _ROOT = Path(__file__).resolve().parents[2]
 _INJECTED = (_ROOT / "data" / "finance_injected_expense.txt").read_text(encoding="utf-8")
 
@@ -76,7 +78,12 @@ def search_expense_docs(query: str) -> str:
 
 
 def _configure(api_url: str) -> None:
-    aiguard.configure(api_url=api_url, process="finance", source_app="finance_app")
+    aiguard.configure(
+        api_url=api_url,
+        process="finance",
+        source_app="finance_app",
+        api_key=load_api_key("finance_app"),
+    )
 
 
 def _run_scripted(

@@ -16,6 +16,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.tools import tool
 
+from scripts.simulated_apps._keys import load_api_key
+
 _ROOT = Path(__file__).resolve().parents[2]
 _INJECTED = (_ROOT / "data" / "risk_injected_customer_history.txt").read_text(
     encoding="utf-8"
@@ -74,7 +76,10 @@ def request_manual_review(customer_id: str, amount: float) -> dict:
 
 def _configure(api_url: str) -> None:
     aiguard.configure(
-        api_url=api_url, process="risk_rating", source_app="risk_rating_app"
+        api_url=api_url,
+        process="risk_rating",
+        source_app="risk_rating_app",
+        api_key=load_api_key("risk_rating_app"),
     )
 
 

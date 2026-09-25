@@ -58,6 +58,7 @@ pythonpath = ["."]
 markers = [
     "live: tests that call the live OpenAI API",
     "postgres: tests that need AEGIS_TEST_POSTGRES_URL (a running Postgres)",
+    "auth: tests that exercise real dashboard/API-key auth (others run with AEGIS_DISABLE_AUTH=1)",
 ]
 addopts = "-m 'not live and not postgres'"
 

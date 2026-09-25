@@ -13,10 +13,17 @@ from .config import get_config
 
 
 class GuardClient:
-    def __init__(self, *, api_url: str | None = None, timeout: float | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        api_url: str | None = None,
+        timeout: float | None = None,
+        api_key: str | None = None,
+    ) -> None:
         cfg = get_config()
         self.api_url = (api_url or cfg.api_url).rstrip("/")
         self.timeout = timeout if timeout is not None else cfg.timeout
+        self.api_key = api_key if api_key is not None else cfg.api_key
 
     def evaluate(
         self,
@@ -48,8 +55,12 @@ class GuardClient:
         app_name = source_app if source_app is not None else cfg.source_app
         if app_name:
             payload["source_app"] = app_name
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         resp = httpx.post(
-            f"{self.api_url}/guard/evaluate", json=payload, timeout=self.timeout
+            f"{self.api_url}/guard/evaluate",
+            json=payload,
+            headers=headers,
+            timeout=self.timeout,
         )
         resp.raise_for_status()
         return resp.json()

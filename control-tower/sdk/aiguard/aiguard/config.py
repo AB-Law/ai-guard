@@ -15,6 +15,7 @@ class GuardConfig:
     process: str = "procurement_review"
     timeout: float = 10.0
     source_app: str | None = None
+    api_key: str | None = None
 
 
 _config = GuardConfig()
@@ -26,12 +27,17 @@ def configure(
     process: str | None = None,
     timeout: float | None = None,
     source_app: str | None = None,
+    api_key: str | None = None,
 ) -> None:
     """Set defaults for every GuardClient/@guard call that doesn't override them.
 
     api_url points at a running Aegis control tower — your own self-hosted
     instance (the default, http://127.0.0.1:8000) or a managed one; nothing
     here assumes a specific hosting model.
+
+    api_key is the application's API key (from POST /applications on the
+    tower) — required for /guard/evaluate to authenticate the caller and
+    bind it to its registered process/source_app.
     """
     if api_url is not None:
         _config.api_url = api_url.rstrip("/")
@@ -41,6 +47,8 @@ def configure(
         _config.timeout = timeout
     if source_app is not None:
         _config.source_app = source_app
+    if api_key is not None:
+        _config.api_key = api_key
 
 
 def get_config() -> GuardConfig:
