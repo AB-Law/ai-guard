@@ -42,6 +42,13 @@ jobs:
       - name: Ruff
         run: $VIRTUAL_ENV/bin/ruff check .
 
+      - name: Evidence docs eval report
+        # Regenerates the checked-in report; fails if the file drifts.
+        # Metrics are visible in reports/evidence_docs_eval.md — not asserted.
+        run: |
+          $VIRTUAL_ENV/bin/python scripts/eval_evidence_docs.py --write reports/evidence_docs_eval.md
+          git diff --exit-code -- reports/evidence_docs_eval.md
+
       - name: Pytest (offline suite, ≥90% coverage)
         # addopts already excludes @pytest.mark.live and @pytest.mark.postgres.
         # Coverage uses tmp_path fixtures only — never writes to data/*.db.
