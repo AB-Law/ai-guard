@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from configs.loader import load_process
+from configs.loader import clear_process_cache, load_process
+
+
+@pytest.fixture(autouse=True)
+def _clear_cache() -> None:
+    clear_process_cache()
+    yield
+    clear_process_cache()
 
 
 def test_load_procurement_review() -> None:
@@ -78,3 +87,27 @@ def test_load_rag_bot() -> None:
     assert search.max_auto_amount is None
     assert "delete_knowledge_document" in cfg.disallowed_tools
     assert any("rag_bot_policy" in p for p in cfg.knowledge_base_paths)
+
+
+def test_load_process_caches_by_mtime(tmp_path: Path) -> None:
+    yaml_text = """
+process: cache_demo
+allowed_tools:
+  - name: do_thing
+disallowed_tools: []
+required_evidence_docs: []
+approval_threshold:
+  risk_score_gte: 50
+knowledge_base_paths: []
+"""
+    path = tmp_path / "cache_demo.yaml"
+    path.write_text(yaml_text, encoding="utf-8")
+
+    a = load_process("cache_demo", configs_dir=tmp_path)
+    b = load_process("cache_demo", configs_dir=tmp_path)
+    assert a is b
+
+    path.write_text(yaml_text.replace("do_thing", "do_other"), encoding="utf-8")
+    c = load_process("cache_demo", configs_dir=tmp_path)
+    assert c is not a
+    assert c.allowed_tools[0].name == "do_other"

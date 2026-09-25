@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import secrets
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -14,7 +15,7 @@ from typing import Any, Literal
 
 import yaml
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from agent.graph import build_graph, initial_state, resume_case, run_case
@@ -26,7 +27,7 @@ from audit.backend import build_audit_store
 from audit.log_store import AppendInput
 from configs.loader import ProcessConfig, known_processes, load_process
 from contracts.schemas import GatewayDecision, ToolCallRequest
-from guardrails import evaluate_tool_call
+from guardrails import evaluate_tool_call, is_hard_block
 from investigation_assistant.qa_agent import (
     InvestigationAnswer,
     entries_for_case,
@@ -674,6 +675,7 @@ def create_app(
     @app.post("/guard/evaluate")
     def guard_evaluate(
         body: GuardEvaluateBody,
+        background_tasks: BackgroundTasks,
         caller: dict[str, Any] = api_key_required,
     ) -> dict[str, Any]:
         """Evaluate one proposed tool call against process policy and audit it —
@@ -705,32 +707,8 @@ def create_app(
 
         call_id = body.call_id or str(uuid.uuid4())
         case_id = f"guard-{call_id}"
-        process_kb = _kb_for(process)
-        query = " ".join(
-            [
-                body.tool_name,
-                " ".join(str(v) for v in body.tool_args.values()),
-                body.agent_rationale,
-            ]
-        ).strip()
-        forced_ids = set(body.force_chunk_ids)
-        raw_retrieved = process_kb.retrieve(query, k=6) if query else []
-        # Same exclusion agent/graph.py's own retrieve step applies: the demo
-        # injected-quote fixture shares line-item wording ("Laptop docks")
-        # with ordinary clean requests, so unscoped top-k retrieval can pull
-        # it into a completely unrelated call and falsely flag it as an
-        # injection attempt. Keep it out unless explicitly forced.
-        retrieved = [
-            c for c in raw_retrieved if c.id != "chunk:injected:quote" or c.id in forced_ids
-        ]
-        for forced_id in forced_ids:
-            if forced_id not in {c.id for c in retrieved}:
-                forced_chunk = process_kb.get_by_id(forced_id)
-                if forced_chunk is not None:
-                    retrieved.append(forced_chunk)
-        context_texts = [c.text for c in retrieved] + list(body.context_texts)
+        stage_timings: dict[str, float] = {}
 
-        retrieved_ids = [c.id for c in retrieved]
         request = ToolCallRequest(
             call_id=call_id,
             process=process,
@@ -738,18 +716,62 @@ def create_app(
             tool_name=body.tool_name,
             tool_args=body.tool_args,
             agent_rationale=body.agent_rationale,
-            context_refs=retrieved_ids,
+            context_refs=[],
             timestamp=_utc_now(),
             case_id=case_id,
         )
-        decision = evaluate_tool_call(
-            request,
-            config,
-            retrieved_texts=context_texts,
-            context_chunks=context_texts,
-            retrieved_chunk_ids=retrieved_ids,
-            audit=app.state.audit,
-        )
+
+        # Deterministic hard blocks skip KB retrieve + LLM judges entirely.
+        if is_hard_block(request, config):
+            stage_timings["retrieve_ms"] = 0.0
+            decision = evaluate_tool_call(
+                request,
+                config,
+                audit=app.state.audit,
+                stage_timings_ms=stage_timings,
+            )
+        else:
+            process_kb = _kb_for(process)
+            query = " ".join(
+                [
+                    body.tool_name,
+                    " ".join(str(v) for v in body.tool_args.values()),
+                    body.agent_rationale,
+                ]
+            ).strip()
+            forced_ids = set(body.force_chunk_ids)
+            t_retrieve = time.perf_counter()
+            raw_retrieved = process_kb.retrieve(query, k=6) if query else []
+            # Same exclusion agent/graph.py's own retrieve step applies: the demo
+            # injected-quote fixture shares line-item wording ("Laptop docks")
+            # with ordinary clean requests, so unscoped top-k retrieval can pull
+            # it into a completely unrelated call and falsely flag it as an
+            # injection attempt. Keep it out unless explicitly forced.
+            retrieved = [
+                c
+                for c in raw_retrieved
+                if c.id != "chunk:injected:quote" or c.id in forced_ids
+            ]
+            for forced_id in forced_ids:
+                if forced_id not in {c.id for c in retrieved}:
+                    forced_chunk = process_kb.get_by_id(forced_id)
+                    if forced_chunk is not None:
+                        retrieved.append(forced_chunk)
+            stage_timings["retrieve_ms"] = round(
+                (time.perf_counter() - t_retrieve) * 1000, 2
+            )
+            context_texts = [c.text for c in retrieved] + list(body.context_texts)
+            retrieved_ids = [c.id for c in retrieved]
+            request = request.model_copy(update={"context_refs": retrieved_ids})
+            decision = evaluate_tool_call(
+                request,
+                config,
+                retrieved_texts=context_texts,
+                context_chunks=context_texts,
+                retrieved_chunk_ids=retrieved_ids,
+                audit=app.state.audit,
+                stage_timings_ms=stage_timings,
+            )
         # Surface SDK / external evaluations on /cases and /traffic/recent so
         # simulated apps show up alongside graph-driven /cases traffic.
         # "escalate" here has no LangGraph thread to resume (unlike /cases) —
@@ -757,7 +779,7 @@ def create_app(
         # (and the dashboard's own POST /approvals/{call_id}) to resolve it
         # via _resolve_guard_evaluate_case instead of resume_case.
         status = "pending_approval" if decision.decision == "escalate" else "completed"
-        store.cases[case_id] = {
+        case_row = {
             "case_id": case_id,
             "process": process,
             "status": status,
@@ -772,7 +794,17 @@ def create_app(
             "created_at": _utc_now(),
             "origin": "guard_evaluate",
         }
-        store.call_to_case[call_id] = case_id
+
+        def _persist_case() -> None:
+            store.cases[case_id] = case_row
+            store.call_to_case[call_id] = case_id
+
+        # Escalate must be visible before the response returns (SDK polling /
+        # wait_for_decision). Allow/block can persist after the response.
+        if decision.decision == "escalate":
+            _persist_case()
+        else:
+            background_tasks.add_task(_persist_case)
         return decision.model_dump()
 
     def _guard_case_snapshot(case: dict[str, Any]) -> dict[str, Any]:

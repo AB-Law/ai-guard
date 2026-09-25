@@ -7,7 +7,7 @@ entirely on the tower side, this just asks it questions per tool call.
 from __future__ import annotations
 
 import time
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 import httpx
 
@@ -26,6 +26,16 @@ class GuardClient:
         self.api_url = (api_url or cfg.api_url).rstrip("/")
         self.timeout = timeout if timeout is not None else cfg.timeout
         self.api_key = api_key if api_key is not None else cfg.api_key
+        self._http = httpx.Client(timeout=self.timeout)
+
+    def close(self) -> None:
+        self._http.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
 
     def evaluate(
         self,
@@ -57,11 +67,10 @@ class GuardClient:
         app_name = source_app if source_app is not None else cfg.source_app
         if app_name:
             payload["source_app"] = app_name
-        resp = httpx.post(
+        resp = self._http.post(
             f"{self.api_url}/guard/evaluate",
             json=payload,
             headers=self._headers(),
-            timeout=self.timeout,
         )
         resp.raise_for_status()
         return resp.json()
@@ -77,10 +86,9 @@ class GuardClient:
         originated (or any call_id at all, for a dashboard token); a 403
         means it belongs to a different application.
         """
-        resp = httpx.get(
+        resp = self._http.get(
             f"{self.api_url}/guard/approvals/{call_id}",
             headers=self._headers(),
-            timeout=self.timeout,
         )
         resp.raise_for_status()
         return resp.json()
@@ -95,11 +103,10 @@ class GuardClient:
         decision, the same way you would for a decision that was never
         escalated in the first place.
         """
-        resp = httpx.post(
+        resp = self._http.post(
             f"{self.api_url}/guard/approvals/{call_id}",
             json={"action": action, "actor": actor},
             headers=self._headers(),
-            timeout=self.timeout,
         )
         resp.raise_for_status()
         return resp.json()
@@ -136,5 +143,7 @@ class GuardClient:
 def default_client() -> GuardClient:
     """A fresh client built from the current global config on every call —
     deliberately not cached, so a configure() call always takes effect on the
-    next guarded call even if earlier calls already ran."""
+    next guarded call even if earlier calls already ran. Each GuardClient
+    keeps its own pooled httpx.Client for connection reuse across evaluates.
+    """
     return GuardClient()

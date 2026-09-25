@@ -13,7 +13,9 @@ DEFAULT_API_URL = "http://127.0.0.1:8000"
 class GuardConfig:
     api_url: str = DEFAULT_API_URL
     process: str = "procurement_review"
-    timeout: float = 10.0
+    # Live /guard/evaluate runs retrieval + up to three LLM judges; 10s was
+    # too short and forced every integrating app to override.
+    timeout: float = 60.0
     source_app: str | None = None
     api_key: str | None = None
 

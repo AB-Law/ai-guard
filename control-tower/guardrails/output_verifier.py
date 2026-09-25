@@ -173,14 +173,9 @@ def _llm_judge(
     if not context_chunks and not facts_text:
         return VerificationResult(evidence_score=0.0, unsupported_claims=_split_claims(rationale))
 
-    from langchain_openai import ChatOpenAI
+    from guardrails.llm import get_chat_openai
 
-    model_name = os.environ.get("OPENAI_MODEL", "gpt-4o")
-    llm = ChatOpenAI(
-        model=model_name,
-        api_key=os.environ["OPENAI_API_KEY"],
-        timeout=30,
-    )
+    llm = get_chat_openai()
     structured = llm.with_structured_output(VerificationResult, method="function_calling")
 
     context_block = "\n\n".join(f"[{i}] {c}" for i, c in enumerate(context_chunks)) or "(none)"

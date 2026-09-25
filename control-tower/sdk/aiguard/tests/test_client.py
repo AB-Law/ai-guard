@@ -1,4 +1,4 @@
-"""Unit tests for GuardClient — mocks httpx.post/get so these run with no server."""
+"""Unit tests for GuardClient — mocks httpx.Client so these run with no server."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import aiguard
 import pytest
 from aiguard.client import GuardClient
+from aiguard.config import GuardConfig, get_config
 
 
 def _mock_response(payload: dict) -> MagicMock:
@@ -16,17 +17,43 @@ def _mock_response(payload: dict) -> MagicMock:
     return resp
 
 
+def _patch_http_client() -> MagicMock:
+    mock_http = MagicMock()
+    return mock_http
+
+
+@pytest.fixture(autouse=True)
+def _reset_config() -> None:
+    # Ensure timeout default assertions aren't polluted by prior configure().
+    cfg = get_config()
+    cfg.api_url = "http://127.0.0.1:8000"
+    cfg.process = "procurement_review"
+    cfg.timeout = GuardConfig.timeout
+    cfg.source_app = None
+    cfg.api_key = None
+
+
+def test_default_timeout_is_sixty_seconds() -> None:
+    assert GuardConfig().timeout == 60.0
+    with patch("aiguard.client.httpx.Client") as mock_cls:
+        mock_cls.return_value = MagicMock()
+        GuardClient()
+    mock_cls.assert_called_once()
+    assert mock_cls.call_args.kwargs.get("timeout") == 60.0
+
+
 def test_evaluate_posts_to_guard_evaluate_with_expected_payload() -> None:
     aiguard.configure(api_url="http://example.test:9000", process="procurement_review")
-    with patch("aiguard.client.httpx.post") as mock_post:
-        mock_post.return_value = _mock_response(
-            {"call_id": "abc", "decision": "allow", "reason": "ok", "policy_refs": []}
-        )
+    mock_http = MagicMock()
+    mock_http.post.return_value = _mock_response(
+        {"call_id": "abc", "decision": "allow", "reason": "ok", "policy_refs": []}
+    )
+    with patch("aiguard.client.httpx.Client", return_value=mock_http):
         client = GuardClient()
         result = client.evaluate(tool_name="create_purchase_order", tool_args={"amount": 100})
 
     assert result["decision"] == "allow"
-    args, kwargs = mock_post.call_args
+    args, kwargs = mock_http.post.call_args
     assert args[0] == "http://example.test:9000/guard/evaluate"
     body = kwargs["json"]
     assert body["tool_name"] == "create_purchase_order"
@@ -35,15 +62,27 @@ def test_evaluate_posts_to_guard_evaluate_with_expected_payload() -> None:
     assert "call_id" not in body  # not supplied -> omitted, not sent as null
 
 
+def test_client_reuses_same_http_transport_across_calls() -> None:
+    mock_http = MagicMock()
+    mock_http.post.return_value = _mock_response({"call_id": "1", "decision": "allow"})
+    with patch("aiguard.client.httpx.Client", return_value=mock_http) as mock_cls:
+        client = GuardClient(api_url="http://example.test:9000")
+        client.evaluate(tool_name="a")
+        client.evaluate(tool_name="b")
+    assert mock_cls.call_count == 1
+    assert mock_http.post.call_count == 2
+
+
 def test_evaluate_includes_call_id_when_supplied() -> None:
-    with patch("aiguard.client.httpx.post") as mock_post:
-        mock_post.return_value = _mock_response(
-            {"call_id": "xyz", "decision": "block", "reason": "no"}
-        )
+    mock_http = MagicMock()
+    mock_http.post.return_value = _mock_response(
+        {"call_id": "xyz", "decision": "block", "reason": "no"}
+    )
+    with patch("aiguard.client.httpx.Client", return_value=mock_http):
         client = GuardClient(api_url="http://example.test:9000")
         client.evaluate(tool_name="t", call_id="my-call-id")
 
-    body = mock_post.call_args.kwargs["json"]
+    body = mock_http.post.call_args.kwargs["json"]
     assert body["call_id"] == "my-call-id"
 
 
@@ -53,70 +92,76 @@ def test_evaluate_includes_source_app_from_configure() -> None:
         process="finance",
         source_app="finance_app",
     )
-    with patch("aiguard.client.httpx.post") as mock_post:
-        mock_post.return_value = _mock_response({"call_id": "1", "decision": "allow"})
+    mock_http = MagicMock()
+    mock_http.post.return_value = _mock_response({"call_id": "1", "decision": "allow"})
+    with patch("aiguard.client.httpx.Client", return_value=mock_http):
         GuardClient().evaluate(tool_name="submit_expense_report", tool_args={"amount": 10})
 
-    assert mock_post.call_args.kwargs["json"]["source_app"] == "finance_app"
+    assert mock_http.post.call_args.kwargs["json"]["source_app"] == "finance_app"
 
 
 def test_per_call_process_overrides_global_config() -> None:
     aiguard.configure(process="procurement_review")
-    with patch("aiguard.client.httpx.post") as mock_post:
-        mock_post.return_value = _mock_response({"call_id": "1", "decision": "allow"})
+    mock_http = MagicMock()
+    mock_http.post.return_value = _mock_response({"call_id": "1", "decision": "allow"})
+    with patch("aiguard.client.httpx.Client", return_value=mock_http):
         GuardClient(api_url="http://example.test:9000").evaluate(
             tool_name="verify_identity", process="onboarding_kyc"
         )
 
-    assert mock_post.call_args.kwargs["json"]["process"] == "onboarding_kyc"
+    assert mock_http.post.call_args.kwargs["json"]["process"] == "onboarding_kyc"
 
 
 def test_get_approval_gets_the_guard_approvals_endpoint() -> None:
-    with patch("aiguard.client.httpx.get") as mock_get:
-        mock_get.return_value = _mock_response(
-            {"call_id": "c1", "status": "pending_approval", "decision": {"decision": "escalate"}}
-        )
+    mock_http = MagicMock()
+    mock_http.get.return_value = _mock_response(
+        {"call_id": "c1", "status": "pending_approval", "decision": {"decision": "escalate"}}
+    )
+    with patch("aiguard.client.httpx.Client", return_value=mock_http):
         client = GuardClient(api_url="http://example.test:9000", api_key="sk_test_abc")
         result = client.get_approval("c1")
 
     assert result["status"] == "pending_approval"
-    args, kwargs = mock_get.call_args
+    args, kwargs = mock_http.get.call_args
     assert args[0] == "http://example.test:9000/guard/approvals/c1"
     assert kwargs["headers"] == {"Authorization": "Bearer sk_test_abc"}
 
 
 def test_get_approval_omits_auth_header_when_no_api_key() -> None:
-    with patch("aiguard.client.httpx.get") as mock_get:
-        mock_get.return_value = _mock_response({"call_id": "c1", "status": "completed"})
+    mock_http = MagicMock()
+    mock_http.get.return_value = _mock_response({"call_id": "c1", "status": "completed"})
+    with patch("aiguard.client.httpx.Client", return_value=mock_http):
         GuardClient(api_url="http://example.test:9000").get_approval("c1")
 
-    assert mock_get.call_args.kwargs["headers"] == {}
+    assert mock_http.get.call_args.kwargs["headers"] == {}
 
 
 def test_resolve_approval_posts_action_and_actor() -> None:
-    with patch("aiguard.client.httpx.post") as mock_post:
-        mock_post.return_value = _mock_response(
-            {"call_id": "c1", "status": "completed", "decision": {"decision": "allow"}}
-        )
+    mock_http = MagicMock()
+    mock_http.post.return_value = _mock_response(
+        {"call_id": "c1", "status": "completed", "decision": {"decision": "allow"}}
+    )
+    with patch("aiguard.client.httpx.Client", return_value=mock_http):
         client = GuardClient(api_url="http://example.test:9000")
         result = client.resolve_approval("c1", action="approve", actor="alice")
 
     assert result["status"] == "completed"
-    args, kwargs = mock_post.call_args
+    args, kwargs = mock_http.post.call_args
     assert args[0] == "http://example.test:9000/guard/approvals/c1"
     assert kwargs["json"] == {"action": "approve", "actor": "alice"}
 
 
 def test_wait_for_decision_returns_immediately_when_already_resolved() -> None:
-    with patch("aiguard.client.httpx.get") as mock_get:
-        mock_get.return_value = _mock_response(
-            {"call_id": "c1", "status": "completed", "decision": {"decision": "allow"}}
-        )
+    mock_http = MagicMock()
+    mock_http.get.return_value = _mock_response(
+        {"call_id": "c1", "status": "completed", "decision": {"decision": "allow"}}
+    )
+    with patch("aiguard.client.httpx.Client", return_value=mock_http):
         client = GuardClient(api_url="http://example.test:9000")
         result = client.wait_for_decision("c1", poll_interval=0.01, timeout=1.0)
 
     assert result["status"] == "completed"
-    assert mock_get.call_count == 1
+    assert mock_http.get.call_count == 1
 
 
 def test_wait_for_decision_polls_until_resolved() -> None:
@@ -125,17 +170,20 @@ def test_wait_for_decision_polls_until_resolved() -> None:
         _mock_response({"call_id": "c1", "status": "pending_approval"}),
         _mock_response({"call_id": "c1", "status": "completed", "decision": {"decision": "allow"}}),
     ]
-    with patch("aiguard.client.httpx.get", side_effect=responses) as mock_get:
+    mock_http = MagicMock()
+    mock_http.get.side_effect = responses
+    with patch("aiguard.client.httpx.Client", return_value=mock_http):
         client = GuardClient(api_url="http://example.test:9000")
         result = client.wait_for_decision("c1", poll_interval=0.001, timeout=5.0)
 
     assert result["status"] == "completed"
-    assert mock_get.call_count == 3
+    assert mock_http.get.call_count == 3
 
 
 def test_wait_for_decision_times_out_while_still_pending() -> None:
-    with patch("aiguard.client.httpx.get") as mock_get:
-        mock_get.return_value = _mock_response({"call_id": "c1", "status": "pending_approval"})
+    mock_http = MagicMock()
+    mock_http.get.return_value = _mock_response({"call_id": "c1", "status": "pending_approval"})
+    with patch("aiguard.client.httpx.Client", return_value=mock_http):
         client = GuardClient(api_url="http://example.test:9000")
         with pytest.raises(TimeoutError):
             client.wait_for_decision("c1", poll_interval=0.01, timeout=0.03)
