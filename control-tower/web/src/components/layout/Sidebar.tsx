@@ -8,9 +8,11 @@ import {
   SlidersHorizontal,
   Search,
   ShieldCheck,
+  LogOut,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { Badge } from '../ui/Badge'
+import { useAuth } from '../../lib/auth'
 
 const navItems = [
   { to: '/', label: 'Overview', icon: LayoutGrid, end: true },
@@ -24,6 +26,7 @@ const navItems = [
 // Below `lg` this collapses to an icon-only rail (no hamburger/overlay state
 // needed) so the layout never has to overlap content to fit a full sidebar.
 export function Sidebar({ pendingApprovals = 0 }: { pendingApprovals?: number }) {
+  const { user, logout } = useAuth()
   return (
     <div className="flex w-[64px] shrink-0 flex-col gap-6 border-r border-border bg-[#0d1117] p-2.5 lg:w-[230px] lg:p-3.5">
       <div className="flex items-center justify-center gap-2.5 px-0 lg:justify-start lg:px-1.5">
@@ -71,12 +74,22 @@ export function Sidebar({ pendingApprovals = 0 }: { pendingApprovals?: number })
         </div>
       </nav>
 
-      <div className="mt-auto hidden rounded-lg border border-border bg-surface p-2.5 text-[10.5px] text-text-muted lg:block">
-        <div className="flex items-center gap-1.5 text-[10.5px] font-bold tracking-wide text-success">
-          <span className="h-1.5 w-1.5 rounded-full bg-success" />
-          DEMO · OFFLINE MODE
+      <div className="mt-auto flex flex-col gap-2.5">
+        <button
+          onClick={logout}
+          title={user ? `Sign out (${user.email})` : 'Sign out'}
+          className="flex items-center justify-center gap-2.5 rounded-lg px-2.5 py-2.5 text-[13.5px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary lg:justify-start lg:px-3 lg:py-2"
+        >
+          <LogOut size={17} strokeWidth={1.6} className="shrink-0" />
+          <span className="hidden truncate lg:inline">{user?.email ?? 'Sign out'}</span>
+        </button>
+        <div className="hidden rounded-lg border border-border bg-surface p-2.5 text-[10.5px] text-text-muted lg:block">
+          <div className="flex items-center gap-1.5 text-[10.5px] font-bold tracking-wide text-success">
+            <span className="h-1.5 w-1.5 rounded-full bg-success" />
+            DEMO · OFFLINE MODE
+          </div>
+          <div className="mt-1 leading-snug">No live API key required for this run</div>
         </div>
-        <div className="mt-1 leading-snug">No live API key required for this run</div>
       </div>
     </div>
   )

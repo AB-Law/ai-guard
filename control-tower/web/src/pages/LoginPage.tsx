@@ -10,18 +10,21 @@ export function LoginPage() {
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    // No backend auth yet — this just starts a local "session" so the rest of
-    // the app has someone to attribute actions to. Wire a real /auth/login call here.
-    login(email || 'demo@aegis.dev')
-    navigate('/', { replace: true })
-  }
-
-  function continueAsDemo() {
-    login('demo@aegis.dev')
-    navigate('/', { replace: true })
+    setError(null)
+    setSubmitting(true)
+    try {
+      await login(email || 'demo@aegis.dev', password)
+      navigate('/', { replace: true })
+    } catch {
+      setError('Wrong password, or the server has no DASHBOARD_PASSWORD configured.')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -44,8 +47,8 @@ export function LoginPage() {
           <div>
             <div className="text-[15px] font-bold">Sign in</div>
             <div className="mt-1 text-[12.5px] text-text-secondary">
-              Authentication is not wired up yet — this screen is here so it can be
-              configured later.
+              One shared dashboard password (set as <code className="font-mono">DASHBOARD_PASSWORD</code> on the
+              server). Your email is just how your name shows up on approvals.
             </div>
           </div>
 
@@ -61,33 +64,26 @@ export function LoginPage() {
           </label>
 
           <label className="flex flex-col gap-1.5 text-xs font-semibold text-text-secondary">
-            Password
+            Dashboard password
             <Input
               type="password"
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
+              required
             />
           </label>
 
-          <Button type="submit" variant="accent" size="lg" className="mt-1 w-full">
-            Sign in
-          </Button>
+          {error && <div className="text-xs font-semibold text-danger">{error}</div>}
 
-          <div className="flex items-center gap-3 text-[11px] text-text-muted">
-            <span className="h-px flex-1 bg-border" />
-            or
-            <span className="h-px flex-1 bg-border" />
-          </div>
-
-          <Button type="button" variant="default" size="lg" className="w-full" onClick={continueAsDemo}>
-            Continue as demo user
+          <Button type="submit" variant="accent" size="lg" className="mt-1 w-full" disabled={submitting}>
+            {submitting ? 'Signing in…' : 'Sign in'}
           </Button>
         </form>
 
         <div className="mt-4 text-center text-[11px] text-text-muted">
-          SSO / real auth provider — coming soon
+          SSO / per-user accounts — coming soon
         </div>
       </div>
     </div>

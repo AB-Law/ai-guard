@@ -6,7 +6,7 @@ import { LoginPage } from './LoginPage'
 import { renderApp } from '../test/render'
 
 describe('LoginPage', () => {
-  it('signs in with email and navigates home', async () => {
+  it('signs in with email + password and navigates home', async () => {
     const user = userEvent.setup()
     renderApp(
       <Routes>
@@ -22,6 +22,7 @@ describe('LoginPage', () => {
 
     await waitFor(() => expect(screen.getByText('home')).toBeInTheDocument())
     expect(JSON.parse(localStorage.getItem('aegis.auth.user')!).email).toBe('ops@aegis.dev')
+    expect(localStorage.getItem('aegis.auth.token')).toBe('test-token')
   })
 
   it('defaults to demo email when blank', async () => {
@@ -33,12 +34,13 @@ describe('LoginPage', () => {
       </Routes>,
       { route: '/login', authenticated: false },
     )
+    await user.type(screen.getByPlaceholderText('••••••••'), 'secret')
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
     await waitFor(() => expect(screen.getByText('home')).toBeInTheDocument())
     expect(JSON.parse(localStorage.getItem('aegis.auth.user')!).email).toBe('demo@aegis.dev')
   })
 
-  it('continues as demo user', async () => {
+  it('shows an error on a rejected password', async () => {
     const user = userEvent.setup()
     renderApp(
       <Routes>
@@ -47,7 +49,10 @@ describe('LoginPage', () => {
       </Routes>,
       { route: '/login', authenticated: false },
     )
-    await user.click(screen.getByRole('button', { name: 'Continue as demo user' }))
-    await waitFor(() => expect(screen.getByText('home')).toBeInTheDocument())
+    await user.type(screen.getByPlaceholderText('••••••••'), 'wrong')
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    await waitFor(() =>
+      expect(screen.getByText(/wrong password/i)).toBeInTheDocument(),
+    )
   })
 })

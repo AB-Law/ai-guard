@@ -217,7 +217,10 @@ export const configs: ConfigsResponse = {
       disallowed_tools: ['send_payment'],
       approval_threshold: { risk_score_gte: 60 },
       seed_docs: ['policies/procurement.md'],
-      uploaded_docs: ['extra-policy.md'],
+      uploaded_docs: [
+        { name: 'extra-policy.md', kind: 'uploaded', path: 'extra-policy.md' },
+        { name: 'custom-note.md', kind: 'custom', path: 'custom/custom-note.md' },
+      ],
     },
     {
       id: 'onboarding_kyc',

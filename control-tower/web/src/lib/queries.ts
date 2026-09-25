@@ -91,6 +91,47 @@ export function useConfigs() {
   })
 }
 
+export function useCreateProcess() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.createProcess,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['configs'] }),
+  })
+}
+
+export function useUpdateProcess() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: api.UpdateProcessInput }) => api.updateProcess(id, input),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['configs'] }),
+  })
+}
+
+export function useCreatePolicy() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.createPolicy,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['configs'] }),
+  })
+}
+
+export function useUpdatePolicy() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ process, filename, input }: { process: string; filename: string; input: { title: string; content: string } }) =>
+      api.updatePolicy(process, filename, input),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['configs'] }),
+  })
+}
+
+export function useDeleteDocument() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ process, docPath }: { process: string; docPath: string }) => api.deleteDocument(process, docPath),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['configs'] }),
+  })
+}
+
 export function useApplications() {
   return useQuery({
     queryKey: ['applications'],

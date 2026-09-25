@@ -2,7 +2,7 @@ import type { ButtonHTMLAttributes } from 'react'
 import { cva, type VariantProps } from 'class-variance-authority'
 import { cn } from '../../lib/utils'
 
-const buttonStyles = cva(
+export const buttonStyles = cva(
   'inline-flex items-center justify-center gap-1.5 rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
   {
     variants: {

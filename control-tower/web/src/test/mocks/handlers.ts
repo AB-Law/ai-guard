@@ -15,14 +15,27 @@ const api = (path: string) => `*/api${path}`
 let appsState = [...applications]
 let auditValid = true
 let approvalsState = [...approvals]
+let configsState = { processes: configs.processes.map((p) => ({ ...p, uploaded_docs: [...p.uploaded_docs] })) }
+const policyContent = new Map<string, string>([['procurement_review/custom/custom-note.md', 'Original custom note body.']])
 
 export function resetMockState() {
   appsState = [...applications]
   auditValid = true
   approvalsState = [...approvals]
+  configsState = { processes: configs.processes.map((p) => ({ ...p, uploaded_docs: [...p.uploaded_docs] })) }
+  policyContent.clear()
+  policyContent.set('procurement_review/custom/custom-note.md', 'Original custom note body.')
 }
 
 export const handlers = [
+  http.post(api('/auth/login'), async ({ request }) => {
+    const body = (await request.json()) as { password: string }
+    if (!body.password || body.password === 'wrong') {
+      return HttpResponse.json({ detail: 'invalid password' }, { status: 401 })
+    }
+    return HttpResponse.json({ access_token: 'test-token', token_type: 'bearer' })
+  }),
+
   http.get(api('/health'), () => HttpResponse.json({ status: 'ok' })),
 
   http.get(api('/cases'), () => HttpResponse.json({ cases })),
@@ -62,7 +75,89 @@ export const handlers = [
     })
   }),
 
-  http.get(api('/configs'), () => HttpResponse.json(configs)),
+  http.get(api('/configs'), () => HttpResponse.json(configsState)),
+
+  http.post(api('/configs'), async ({ request }) => {
+    const body = (await request.json()) as { title: string; approval_threshold?: number }
+    const id = body.title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+    const created = {
+      id,
+      title: body.title,
+      config_path: `configs/${id}.yaml`,
+      allowed_tools: [],
+      disallowed_tools: [],
+      approval_threshold: { risk_score_gte: body.approval_threshold ?? 60 },
+      seed_docs: [],
+      uploaded_docs: [],
+    }
+    configsState = { processes: [...configsState.processes, created] }
+    return HttpResponse.json(created)
+  }),
+
+  http.put(api('/configs/:id'), async ({ params, request }) => {
+    const body = (await request.json()) as {
+      allowed_tools?: unknown[]
+      disallowed_tools?: string[]
+      approval_threshold?: number
+    }
+    configsState = {
+      processes: configsState.processes.map((p) =>
+        p.id === params.id
+          ? {
+              ...p,
+              allowed_tools: (body.allowed_tools as typeof p.allowed_tools) ?? p.allowed_tools,
+              disallowed_tools: body.disallowed_tools ?? p.disallowed_tools,
+              approval_threshold:
+                body.approval_threshold != null
+                  ? { risk_score_gte: body.approval_threshold }
+                  : p.approval_threshold,
+            }
+          : p,
+      ),
+    }
+    return HttpResponse.json({ id: params.id })
+  }),
+
+  http.post(api('/knowledge/policies'), async ({ request }) => {
+    const body = (await request.json()) as { process: string; title: string; content: string }
+    const filename = `${body.title.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.md`
+    policyContent.set(`${body.process}/custom/${filename}`, body.content)
+    configsState = {
+      processes: configsState.processes.map((p) =>
+        p.id === body.process
+          ? { ...p, uploaded_docs: [...p.uploaded_docs, { name: filename, kind: 'custom' as const, path: `custom/${filename}` }] }
+          : p,
+      ),
+    }
+    return HttpResponse.json({ ok: true, name: filename, path: `custom/${filename}`, chunks_added: 1, kb_size: 1 })
+  }),
+
+  http.get(api('/knowledge/policies/:process/:filename'), ({ params }) => {
+    const key = `${params.process}/custom/${params.filename}`
+    const content = policyContent.get(key)
+    if (content == null) return HttpResponse.json({ detail: 'not found' }, { status: 404 })
+    return HttpResponse.json({ name: params.filename, content })
+  }),
+
+  http.put(api('/knowledge/policies/:process/:filename'), async ({ params, request }) => {
+    const body = (await request.json()) as { content: string }
+    const key = `${params.process}/custom/${params.filename}`
+    if (!policyContent.has(key)) return HttpResponse.json({ detail: 'not found' }, { status: 404 })
+    policyContent.set(key, body.content)
+    return HttpResponse.json({ ok: true, name: params.filename, chunks_added: 1, kb_size: 1 })
+  }),
+
+  http.delete(api('/knowledge/documents/:process/:docPath*'), ({ params }) => {
+    const segments = Array.isArray(params.docPath) ? params.docPath : [params.docPath as string]
+    const docPath = segments.join('/')
+    policyContent.delete(`${params.process}/${docPath}`)
+    configsState = {
+      processes: configsState.processes.map((p) =>
+        p.id === params.process ? { ...p, uploaded_docs: p.uploaded_docs.filter((d) => d.path !== docPath) } : p,
+      ),
+    }
+    return HttpResponse.json({ ok: true, removed_chunks: 1, kb_size: 0 })
+  }),
 
   http.get(api('/audit/verify'), () =>
     HttpResponse.json({

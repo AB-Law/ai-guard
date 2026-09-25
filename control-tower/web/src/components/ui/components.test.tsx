@@ -70,9 +70,11 @@ describe('StageDots', () => {
 describe('Sidebar', () => {
   it('shows approval badge count', () => {
     render(
-      <MemoryRouter>
-        <Sidebar pendingApprovals={3} />
-      </MemoryRouter>,
+      <AuthProvider>
+        <MemoryRouter>
+          <Sidebar pendingApprovals={3} />
+        </MemoryRouter>
+      </AuthProvider>,
     )
     expect(screen.getByText('3')).toBeInTheDocument()
     expect(screen.getByTitle('Investigate')).toBeInTheDocument()
