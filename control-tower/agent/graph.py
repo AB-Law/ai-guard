@@ -67,6 +67,7 @@ def build_graph(
     config: ProcessConfig | None = None,
     checkpointer: MemorySaver | None = None,
     side_effects: ToolSideEffects | None = None,
+    case_store: Any | None = None,
 ) -> CompiledStateGraph:
     """Compile the agent graph; process config and KB are resolved from state at runtime."""
     checkpointer = checkpointer or MemorySaver()
@@ -157,7 +158,7 @@ def build_graph(
 
     def scan_injection(state: AgentState) -> dict[str, Any]:
         texts = [c.get("text") for c in (state.get("chunks") or [])]
-        result = scan(texts)
+        result = scan(texts, process=state.get("process"))
         return {"injection_flags": [flag.model_dump() for flag in result.flags]}
 
     def reason(state: AgentState) -> dict[str, Any]:
@@ -213,6 +214,7 @@ def build_graph(
             injection_flags=precomputed,
             retrieved_chunk_ids=[c["id"] for c in chunk_dicts],
             audit=audit,
+            case_store=case_store,
         )
         return {"gateway_decision": _decision_to_dict(decision)}
 

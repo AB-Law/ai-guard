@@ -51,3 +51,29 @@ def redact_payload(value: Any) -> Any:
     if isinstance(value, str):
         return _redact_string(value)
     return value
+
+
+_INJECTION_SPAN_PREVIEW = 40
+
+
+def redact_injection_span(span: str) -> dict[str, str]:
+    """Harder redaction for injection snippets (secrets, tokens, emails).
+
+    Returns a truncated preview plus a full sha256 digest — never persist the
+    raw attack text in incidents, cases, or approval payloads.
+    """
+    text = (span or "").replace("\n", " ").strip()
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    # Scrub secret-shaped tokens from the preview window itself.
+    scrubbed = re.sub(
+        r"(?i)(?:sk-[a-z0-9_-]{8,}|bearer\s+\S+|token[=:\s]+\S+|api[_-]?key[=:\s]+\S+)",
+        "[redacted]",
+        text,
+    )
+    preview = scrubbed[:_INJECTION_SPAN_PREVIEW]
+    if len(scrubbed) > _INJECTION_SPAN_PREVIEW:
+        preview = preview + "…"
+    return {
+        "matched_span_preview": preview,
+        "matched_span_hash": f"{_HASH_PREFIX}{digest}",
+    }

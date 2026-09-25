@@ -60,6 +60,29 @@ class ProcessConfig(BaseModel):
 def clear_process_cache() -> None:
     """Drop cached configs — for tests that rewrite YAML files in place."""
     _process_cache.clear()
+    from guardrails.rule_store import clear_rule_caches
+
+    clear_rule_caches()
+
+
+def apply_rule(
+    process_id: str,
+    *,
+    rule_id: str,
+    approved_by: str,
+    rule_text: str | None = None,
+) -> object:
+    """Activate a pending learned rule and invalidate in-process caches.
+
+    Does not rewrite configs/*.yaml — rules live in the learned_rules store.
+    Multi-worker: other workers pick up via epoch/TTL or POST /configs/reload.
+    """
+    from guardrails.rule_store import get_rule_store
+
+    store = get_rule_store()
+    rule = store.activate(rule_id, approved_by=approved_by, rule_text=rule_text)
+    clear_process_cache()
+    return rule
 
 
 def load_process(name: str, configs_dir: Path | None = None) -> ProcessConfig:

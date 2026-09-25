@@ -54,8 +54,17 @@ export function useApprovalsList() {
 export function useApprove() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: ({ callId, action, actor }: { callId: string; action: 'approve' | 'reject'; actor: string }) =>
-      api.approve(callId, action, actor),
+    mutationFn: ({
+      callId,
+      action,
+      actor,
+      ruleText,
+    }: {
+      callId: string
+      action: 'approve' | 'reject'
+      actor: string
+      ruleText?: string | null
+    }) => api.approve(callId, action, actor, ruleText),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ['cases'] })
       client.invalidateQueries({ queryKey: ['traffic-recent'] })

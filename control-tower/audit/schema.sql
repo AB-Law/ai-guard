@@ -12,3 +12,14 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 CREATE INDEX IF NOT EXISTS idx_audit_process ON audit_log(process);
 CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_log(event_type);
+
+-- Non-chained query index for injection incidents (points at audit_log.entry_id).
+CREATE TABLE IF NOT EXISTS incidents (
+    incident_id TEXT PRIMARY KEY,
+    entry_id TEXT NOT NULL,
+    process_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_incidents_process ON incidents(process_id);
+CREATE INDEX IF NOT EXISTS idx_incidents_entry ON incidents(entry_id);

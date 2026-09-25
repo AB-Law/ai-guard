@@ -74,57 +74,86 @@ class AuditLogStore:
         return entries[0]
 
     def append_many(self, entries: list[AppendInput]) -> list[AuditLogEntry]:
-        """Append multiple events in one connection/transaction (hash chain order preserved)."""
+        """Append multiple events in one connection/transaction (hash chain order preserved).
+
+        Uses BEGIN IMMEDIATE so concurrent writers (evaluate + learning
+        BackgroundTasks) cannot fork prev_hash.
+        """
         if not entries:
             return []
 
         results: list[AuditLogEntry] = []
         with self._connect() as conn:
-            prev_hash = self._last_entry_hash(conn)
-            for entry in entries:
-                redacted_payload = redact_payload(entry.payload)
-                timestamp = entry.timestamp or datetime.now(UTC).isoformat()
-                entry_id = entry.entry_id or str(uuid.uuid4())
-                entry_hash = compute_entry_hash(prev_hash, redacted_payload, timestamp)
-                scores_json: str | None = None
-                if entry.scores is not None:
-                    scores_json = entry.scores.model_dump_json()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                prev_hash = self._last_entry_hash(conn)
+                for entry in entries:
+                    redacted_payload = redact_payload(entry.payload)
+                    timestamp = entry.timestamp or datetime.now(UTC).isoformat()
+                    entry_id = entry.entry_id or str(uuid.uuid4())
+                    entry_hash = compute_entry_hash(prev_hash, redacted_payload, timestamp)
+                    scores_json: str | None = None
+                    if entry.scores is not None:
+                        scores_json = entry.scores.model_dump_json()
 
-                conn.execute(
-                    """
-                    INSERT INTO audit_log (
-                        entry_id, process, step_id, event_type,
-                        payload_json, scores_json, timestamp, prev_hash, entry_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        entry_id,
-                        entry.process,
-                        entry.step_id,
-                        entry.event_type,
-                        canonical_json(redacted_payload),
-                        scores_json,
-                        timestamp,
-                        prev_hash,
-                        entry_hash,
-                    ),
-                )
-                results.append(
-                    AuditLogEntry(
-                        entry_id=entry_id,
-                        process=entry.process,
-                        step_id=entry.step_id,
-                        event_type=entry.event_type,  # type: ignore[arg-type]
-                        payload=redacted_payload,
-                        scores=entry.scores,
-                        timestamp=timestamp,
-                        prev_hash=prev_hash,
-                        entry_hash=entry_hash,
+                    conn.execute(
+                        """
+                        INSERT INTO audit_log (
+                            entry_id, process, step_id, event_type,
+                            payload_json, scores_json, timestamp, prev_hash, entry_hash
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            entry_id,
+                            entry.process,
+                            entry.step_id,
+                            entry.event_type,
+                            canonical_json(redacted_payload),
+                            scores_json,
+                            timestamp,
+                            prev_hash,
+                            entry_hash,
+                        ),
                     )
-                )
-                prev_hash = entry_hash
-            conn.commit()
+                    results.append(
+                        AuditLogEntry(
+                            entry_id=entry_id,
+                            process=entry.process,
+                            step_id=entry.step_id,
+                            event_type=entry.event_type,  # type: ignore[arg-type]
+                            payload=redacted_payload,
+                            scores=entry.scores,
+                            timestamp=timestamp,
+                            prev_hash=prev_hash,
+                            entry_hash=entry_hash,
+                        )
+                    )
+                    prev_hash = entry_hash
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
         return results
+
+    def index_incident(
+        self,
+        *,
+        incident_id: str,
+        entry_id: str,
+        process_id: str,
+        created_at: str | None = None,
+    ) -> None:
+        """Non-chained incidents index row pointing at an audit_log entry."""
+        ts = created_at or datetime.now(UTC).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO incidents (incident_id, entry_id, process_id, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (incident_id, entry_id, process_id, ts),
+            )
+            conn.commit()
 
     def verify_chain(self) -> bool:
         valid, _ = self.verify_chain_detailed()

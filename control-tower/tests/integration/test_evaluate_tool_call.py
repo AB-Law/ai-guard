@@ -357,7 +357,7 @@ def test_independent_judges_run_concurrently(
     config = load_process("procurement_review")
     delay = 0.08
 
-    def _slow_scan(texts):
+    def _slow_scan(texts, process=None):
         time.sleep(delay)
         from contracts.schemas import InjectionScanResult
 
