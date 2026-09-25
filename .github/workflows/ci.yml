@@ -79,8 +79,22 @@ jobs:
         # MSW mocks all /api calls — no real control-tower DB or API process.
         run: npm run test:coverage
 
+      # Browser binaries live in ~/.cache/ms-playwright. OS packages are
+      # reinstalled every run because hosted runners start clean.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('control-tower/web/package-lock.json') }}
+
       - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
 
       - name: E2E (Playwright, mocked API)
         run: npm run test:e2e
