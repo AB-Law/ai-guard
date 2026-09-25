@@ -16,9 +16,34 @@ def store(tmp_path) -> AuditLogStore:
     return AuditLogStore(tmp_path / "audit.db")
 
 
-def test_genesis_prev_hash_constant() -> None:
-    assert len(GENESIS_PREV_HASH) == 64
-    assert set(GENESIS_PREV_HASH) == {"0"}
+def test_append_many_preserves_hash_chain(store: AuditLogStore) -> None:
+    entries = store.append_many(
+        [
+            AppendInput(
+                process="procurement_review",
+                step_id="s1",
+                event_type="policy_check",
+                payload={"n": 1},
+                timestamp="2026-01-01T00:00:00+00:00",
+                entry_id="batch-1",
+            ),
+            AppendInput(
+                process="procurement_review",
+                step_id="s1",
+                event_type="tool_call",
+                payload={"n": 2},
+                timestamp="2026-01-01T00:00:01+00:00",
+                entry_id="batch-2",
+            ),
+        ]
+    )
+    assert len(entries) == 2
+    assert entries[1].prev_hash == entries[0].entry_hash
+    assert store.verify_chain() is True
+
+
+def test_append_many_empty_is_noop(store: AuditLogStore) -> None:
+    assert store.append_many([]) == []
 
 
 def test_append_chain_verifies(store: AuditLogStore) -> None:

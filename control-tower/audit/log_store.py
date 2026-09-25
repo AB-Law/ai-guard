@@ -70,49 +70,61 @@ class AuditLogStore:
         return row["entry_hash"] if row else GENESIS_PREV_HASH
 
     def append(self, entry: AppendInput) -> AuditLogEntry:
-        redacted_payload = redact_payload(entry.payload)
-        timestamp = entry.timestamp or datetime.now(UTC).isoformat()
-        entry_id = entry.entry_id or str(uuid.uuid4())
+        entries = self.append_many([entry])
+        return entries[0]
 
+    def append_many(self, entries: list[AppendInput]) -> list[AuditLogEntry]:
+        """Append multiple events in one connection/transaction (hash chain order preserved)."""
+        if not entries:
+            return []
+
+        results: list[AuditLogEntry] = []
         with self._connect() as conn:
             prev_hash = self._last_entry_hash(conn)
-            entry_hash = compute_entry_hash(prev_hash, redacted_payload, timestamp)
-            scores_json: str | None = None
-            if entry.scores is not None:
-                scores_json = entry.scores.model_dump_json()
+            for entry in entries:
+                redacted_payload = redact_payload(entry.payload)
+                timestamp = entry.timestamp or datetime.now(UTC).isoformat()
+                entry_id = entry.entry_id or str(uuid.uuid4())
+                entry_hash = compute_entry_hash(prev_hash, redacted_payload, timestamp)
+                scores_json: str | None = None
+                if entry.scores is not None:
+                    scores_json = entry.scores.model_dump_json()
 
-            conn.execute(
-                """
-                INSERT INTO audit_log (
-                    entry_id, process, step_id, event_type,
-                    payload_json, scores_json, timestamp, prev_hash, entry_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    entry_id,
-                    entry.process,
-                    entry.step_id,
-                    entry.event_type,
-                    canonical_json(redacted_payload),
-                    scores_json,
-                    timestamp,
-                    prev_hash,
-                    entry_hash,
-                ),
-            )
+                conn.execute(
+                    """
+                    INSERT INTO audit_log (
+                        entry_id, process, step_id, event_type,
+                        payload_json, scores_json, timestamp, prev_hash, entry_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        entry_id,
+                        entry.process,
+                        entry.step_id,
+                        entry.event_type,
+                        canonical_json(redacted_payload),
+                        scores_json,
+                        timestamp,
+                        prev_hash,
+                        entry_hash,
+                    ),
+                )
+                results.append(
+                    AuditLogEntry(
+                        entry_id=entry_id,
+                        process=entry.process,
+                        step_id=entry.step_id,
+                        event_type=entry.event_type,  # type: ignore[arg-type]
+                        payload=redacted_payload,
+                        scores=entry.scores,
+                        timestamp=timestamp,
+                        prev_hash=prev_hash,
+                        entry_hash=entry_hash,
+                    )
+                )
+                prev_hash = entry_hash
             conn.commit()
-
-        return AuditLogEntry(
-            entry_id=entry_id,
-            process=entry.process,
-            step_id=entry.step_id,
-            event_type=entry.event_type,  # type: ignore[arg-type]
-            payload=redacted_payload,
-            scores=entry.scores,
-            timestamp=timestamp,
-            prev_hash=prev_hash,
-            entry_hash=entry_hash,
-        )
+        return results
 
     def verify_chain(self) -> bool:
         valid, _ = self.verify_chain_detailed()

@@ -93,10 +93,9 @@ def _truncate_for_llm(text: str) -> str:
 
 def _llm_classify(texts: list[str]) -> InjectionClassifierResult:
     """Semantic injection classifier — used only when OPENAI_API_KEY is set."""
-    from langchain_openai import ChatOpenAI
+    from guardrails.llm import get_chat_openai
 
-    model_name = os.environ.get("OPENAI_MODEL", "gpt-4o")
-    llm = ChatOpenAI(model=model_name, api_key=os.environ["OPENAI_API_KEY"])
+    llm = get_chat_openai()
     structured = llm.with_structured_output(InjectionClassifierResult, method="function_calling")
 
     context_block = "\n\n".join(

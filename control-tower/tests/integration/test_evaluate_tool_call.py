@@ -299,3 +299,94 @@ def test_judge_unavailable_still_blocks_disallowed_tool(
         )
     assert decision.decision == "block"
     assert "judge_unavailable" not in decision.policy_refs
+
+
+def test_early_hard_block_skips_llm_judges(store: AuditLogStore) -> None:
+    config = load_process("procurement_review")
+    with (
+        patch("guardrails.injection_guard.scan") as mock_scan,
+        patch("guardrails.output_verifier.verify_evidence") as mock_verify,
+        patch("guardrails.policy_entailment.check_policy_entailment") as mock_entail,
+    ):
+        decision = evaluate_tool_call(
+            _sample_request(tool_name="send_payment"),
+            config,
+            retrieved_texts=["should not be scanned"],
+            context_chunks=["should not be scanned"],
+            audit=store,
+        )
+    mock_scan.assert_not_called()
+    mock_verify.assert_not_called()
+    mock_entail.assert_not_called()
+    assert decision.decision == "block"
+    policy_rows = store.query(event_type="policy_check")
+    assert policy_rows[0].payload.get("early_hard_block") is True
+    assert "stage_timings_ms" in policy_rows[0].payload
+    assert store.verify_chain()
+
+
+def test_policy_check_includes_stage_timings(store: AuditLogStore) -> None:
+    config = load_process("procurement_review")
+    policy = Path(__file__).resolve().parents[2] / "data" / "procurement_policy.md"
+    chunk = policy.read_text(encoding="utf-8")
+    timings: dict[str, float] = {"retrieve_ms": 1.5}
+
+    decision = evaluate_tool_call(
+        _sample_request(),
+        config,
+        retrieved_texts=[chunk],
+        context_chunks=[chunk],
+        retrieved_chunk_ids=list(_PROCUREMENT_CHUNK_IDS),
+        audit=store,
+        stage_timings_ms=timings,
+    )
+    assert decision.decision == "allow"
+    payload = store.query(event_type="policy_check")[0].payload
+    assert payload["stage_timings_ms"]["retrieve_ms"] == 1.5
+    assert "evidence_ms" in payload["stage_timings_ms"]
+    assert "total_ms" in payload["stage_timings_ms"]
+
+
+def test_independent_judges_run_concurrently(
+    store: AuditLogStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wall clock should be closer to max(stage) than sum when judges sleep."""
+    import time
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    config = load_process("procurement_review")
+    delay = 0.08
+
+    def _slow_scan(texts):  # noqa: ANN001
+        time.sleep(delay)
+        from contracts.schemas import InjectionScanResult
+
+        return InjectionScanResult(flags=[], trust="none")
+
+    def _slow_verify(*_a, **_k):  # noqa: ANN001
+        time.sleep(delay)
+        return VerificationResult(evidence_score=1.0, unsupported_claims=[])
+
+    def _slow_entail(*_a, **_k):  # noqa: ANN001
+        time.sleep(delay)
+        return PolicyEntailmentResult(compliant=True, violated_clauses=[], severity="none")
+
+    with (
+        patch("guardrails.injection_guard.scan", side_effect=_slow_scan),
+        patch("guardrails.output_verifier.verify_evidence", side_effect=_slow_verify),
+        patch("guardrails.policy_entailment.check_policy_entailment", side_effect=_slow_entail),
+    ):
+        t0 = time.perf_counter()
+        decision = evaluate_tool_call(
+            _sample_request(),
+            config,
+            retrieved_texts=["chunk"],
+            context_chunks=["chunk"],
+            retrieved_chunk_ids=list(_PROCUREMENT_CHUNK_IDS),
+            audit=store,
+        )
+        elapsed = time.perf_counter() - t0
+
+    assert decision.decision == "allow"
+    # Sequential would be ≥ 3*delay; concurrent should finish well under 2.5*delay.
+    assert elapsed < delay * 2.5

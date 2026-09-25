@@ -9,6 +9,9 @@ from pydantic import BaseModel, Field
 
 _CONFIGS_DIR = Path(__file__).resolve().parent
 
+# (resolved path, mtime_ns) -> ProcessConfig
+_process_cache: dict[tuple[str, int], ProcessConfig] = {}
+
 
 def known_processes(configs_dir: Path | None = None) -> tuple[str, ...]:
     """Every process with a config YAML on disk — discovered fresh on each
@@ -54,16 +57,36 @@ class ProcessConfig(BaseModel):
     title: str | None = None
 
 
+def clear_process_cache() -> None:
+    """Drop cached configs — for tests that rewrite YAML files in place."""
+    _process_cache.clear()
+
+
 def load_process(name: str, configs_dir: Path | None = None) -> ProcessConfig:
-    """Load a process YAML by process name (filename stem)."""
+    """Load a process YAML by process name (filename stem).
+
+    Cached by absolute path + mtime so hot-path evaluates skip repeated YAML
+    parse; wizard writes bump mtime and pick up the new config automatically.
+    """
     base = configs_dir or _CONFIGS_DIR
     available = known_processes(base)
     if name not in available:
         raise ValueError(
             f"Unknown process {name!r}. Known processes: {', '.join(available)}"
         )
-    path = base / f"{name}.yaml"
+    path = (base / f"{name}.yaml").resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Process config not found: {path}")
+    mtime_ns = path.stat().st_mtime_ns
+    cache_key = (str(path), mtime_ns)
+    cached = _process_cache.get(cache_key)
+    if cached is not None:
+        return cached
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return ProcessConfig.model_validate(raw)
+    config = ProcessConfig.model_validate(raw)
+    # Drop stale entries for this path (older mtimes) so the cache stays small.
+    stale = [k for k in _process_cache if k[0] == str(path) and k != cache_key]
+    for k in stale:
+        del _process_cache[k]
+    _process_cache[cache_key] = config
+    return config

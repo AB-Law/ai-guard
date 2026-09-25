@@ -22,10 +22,9 @@ def _llm_entail(
     policy_excerpts: list[str],
 ) -> PolicyEntailmentResult:
     """Structured LLM judge: does the proposed tool call comply with policy?"""
-    from langchain_openai import ChatOpenAI
+    from guardrails.llm import get_chat_openai
 
-    model_name = os.environ.get("OPENAI_MODEL", "gpt-4o")
-    llm = ChatOpenAI(model=model_name, api_key=os.environ["OPENAI_API_KEY"])
+    llm = get_chat_openai()
     structured = llm.with_structured_output(PolicyEntailmentResult, method="function_calling")
 
     excerpts_block = (

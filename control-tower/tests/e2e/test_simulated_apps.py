@@ -24,9 +24,9 @@ def tower(tmp_path: Path, project_root: Path) -> TestClient:
 
 @pytest.fixture
 def route_aiguard_through_tower(tower: TestClient):
-    """GuardClient uses httpx.post(url); divert those to the in-process TestClient."""
+    """GuardClient uses a pooled httpx.Client; divert posts to the in-process TestClient."""
 
-    def _post(url: str, json=None, headers=None, timeout=None):
+    def _post(url: str, json=None, headers=None, **_kwargs):
         assert str(url).rstrip("/").endswith("/guard/evaluate")
         resp = tower.post("/guard/evaluate", json=json or {}, headers=headers or {})
         mock = MagicMock()
@@ -44,7 +44,9 @@ def route_aiguard_through_tower(tower: TestClient):
         mock.json = resp.json
         return mock
 
-    with patch("aiguard.client.httpx.post", side_effect=_post):
+    mock_http = MagicMock()
+    mock_http.post.side_effect = _post
+    with patch("aiguard.client.httpx.Client", return_value=mock_http):
         yield tower
 
 
