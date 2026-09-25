@@ -6,7 +6,6 @@ import {
   ScrollText,
   Link2,
   SlidersHorizontal,
-  Search,
   ShieldCheck,
   LogOut,
 } from 'lucide-react'
@@ -65,13 +64,6 @@ export function Sidebar({ pendingApprovals = 0 }: { pendingApprovals?: number })
             )}
           </NavLink>
         ))}
-        <div
-          title="Investigate"
-          className="flex items-center justify-center gap-2.5 rounded-lg px-2.5 py-2.5 text-[13.5px] font-medium text-text-secondary opacity-55 lg:justify-start lg:px-3 lg:py-2"
-        >
-          <Search size={17} strokeWidth={1.6} className="shrink-0" />
-          <span className="hidden lg:inline">Investigate</span>
-        </div>
       </nav>
 
       <div className="mt-auto flex flex-col gap-2.5">

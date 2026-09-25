@@ -831,6 +831,15 @@ def create_app(
         """Reset runtime and load rehearsal fixtures via /cases (escalate left pending)."""
         _reset_demo_state()
         bodies = load_rehearsal_bodies()
+        # Attribute each fixture to the registered application for its
+        # process, so Applications' "requests today" reflects demo traffic
+        # instead of staying at 0 (fixtures carry no source_app of their own).
+        process_to_source_app: dict[str, str] = {}
+        for record in app.state.applications.values():
+            process = record.get("process")
+            source_app = record.get("source_app")
+            if process and source_app:
+                process_to_source_app.setdefault(process, source_app)
         seeded: list[dict[str, Any]] = []
         for raw in bodies:
             body = SubmitCaseBody.model_validate(raw)
@@ -843,7 +852,13 @@ def create_app(
                 force_chunk_ids=body.force_chunk_ids,
             )
             result = run_case(app.state.graph, state, thread_id=case_id)
-            seeded.append(_snapshot_case(case_id, result))
+            seeded.append(
+                _snapshot_case(
+                    case_id,
+                    result,
+                    source_app=process_to_source_app.get(body.process),
+                )
+            )
         pending = sum(1 for c in seeded if c.get("status") == "pending_approval")
         return {
             "ok": True,

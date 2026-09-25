@@ -1,9 +1,11 @@
-"""RAG / Chroma knowledge base with offline-safe deterministic embeddings."""
+"""RAG / Chroma knowledge base — real OpenAI embeddings when a key is
+configured, an offline-safe deterministic fallback otherwise."""
 
 from __future__ import annotations
 
 import csv
 import hashlib
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +52,24 @@ class DeterministicHashEmbedding(EmbeddingFunction[Documents]):
         return [v / norm for v in vec]
 
 
+def _select_embedding_function() -> EmbeddingFunction[Documents]:
+    """Real semantic embeddings when OPENAI_API_KEY is configured — same
+    auto-selection precedent as guardrails/output_verifier.py's LLM judge
+    and agent/graph.py's _live_propose. Without a key, retrieval falls back
+    to DeterministicHashEmbedding (no download, no network, stable for
+    offline demos and the default test suite — tests/conftest.py blanks
+    OPENAI_API_KEY for every non-@pytest.mark.live test, so this stays on
+    the hash path there regardless of a real key in the environment)."""
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return DeterministicHashEmbedding()
+
+    from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+
+    model_name = os.environ.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+    return OpenAIEmbeddingFunction(api_key=api_key, model_name=model_name)
+
+
 def source_for_path(path: str | Path) -> str:
     """The `source` metadata a chunk from `path` is indexed under — project-root-
     relative when possible, so a caller who only has a path (e.g. deleting an
@@ -71,10 +91,19 @@ class KnowledgeBase:
     """In-memory Chroma index over procurement seed documents."""
 
     def __init__(self, collection_name: str = "aegis_kb") -> None:
-        self._embedder = DeterministicHashEmbedding()
+        self._embedder = _select_embedding_function()
         self._client = chromadb.EphemeralClient()
+        # chromadb.EphemeralClient() instances share one process-wide backing
+        # store keyed by collection name — not actually isolated per instance
+        # (verified: a second EphemeralClient() sees collections created by
+        # the first). Namespacing by embedder name keeps a hash-embedded and
+        # an OpenAI-embedded collection of the same logical name from
+        # colliding — e.g. across pytest tests that flip OPENAI_API_KEY
+        # on/off between runs in one process — instead of hitting chromadb's
+        # "embedding function conflict" error or a vector-dimension mismatch.
+        physical_name = f"{collection_name}__{self._embedder.name()}"
         self._collection = self._client.get_or_create_collection(
-            name=collection_name,
+            name=physical_name,
             embedding_function=self._embedder,
             metadata={"hnsw:space": "cosine"},
         )
@@ -99,7 +128,20 @@ class KnowledgeBase:
                 continue
             for chunk_id, text, source in self._load_file(path):
                 if chunk_id in self._docs:
-                    continue
+                    if self._docs[chunk_id].source == source:
+                        continue  # same file re-seeded (e.g. app restart) — true duplicate
+                    # Different file, same auto-derived id — e.g. an uploaded
+                    # policy addendum reusing a common heading like "Required
+                    # checks" collides with the base policy doc's plain
+                    # chunk:policy:required_checks id. Silently dropping it
+                    # here used to discard the addendum's actual content while
+                    # index_seed still reported it as indexed. Disambiguate by
+                    # source instead, so uploads always make it into
+                    # retrieval; the first-loaded (base) doc keeps its plain
+                    # id, so existing chunk_id references are unaffected.
+                    chunk_id = f"{chunk_id}:{Path(source).stem}"
+                    if chunk_id in self._docs:
+                        continue
                 self._docs[chunk_id] = RetrievedChunk(id=chunk_id, text=text, source=source)
                 ids.append(chunk_id)
                 documents.append(text)

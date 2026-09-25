@@ -115,15 +115,17 @@ def build_graph(
         # Policy text is small, bounded, and always relevant to grounding a
         # tool-call rationale — it's this process's required_evidence_docs by
         # definition. Include every section deterministically rather than
-        # leaving it to the semantic query above: the offline hash-bag
-        # embedding (knowledge/rag.py's DeterministicHashEmbedding, chosen for
-        # stable no-download offline retrieval, not semantic accuracy) isn't
-        # reliable enough to guarantee a governing clause outranks several
-        # vendor rows just because the request happens to name a vendor.
-        # Concretely: an "Escalation" section ranked below 4 vendor rows for
-        # a large-amount case, so the agent's "needs human approval" claim
-        # scored unsupported even though the policy document says exactly
-        # that — see the evidence_score discussion for high_amount_escalate.
+        # leaving it to the semantic query above: without OPENAI_API_KEY,
+        # retrieval falls back to knowledge/rag.py's DeterministicHashEmbedding
+        # (no download, offline-stable, not semantic), which isn't reliable
+        # enough to guarantee a governing clause outranks several vendor rows
+        # just because the request happens to name a vendor. Concretely: an
+        # "Escalation" section ranked below 4 vendor rows for a large-amount
+        # case, so the agent's "needs human approval" claim scored unsupported
+        # even though the policy document says exactly that — see the
+        # evidence_score discussion for high_amount_escalate. Kept even with
+        # live OpenAI embeddings: it's cheap, deterministic grounding that
+        # only strengthens the semantic result, never competes with it.
         for c in process_kb.all_chunks():
             if c.id == "chunk:injected:quote" and c.id not in forced_ids:
                 continue

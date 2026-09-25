@@ -77,7 +77,6 @@ describe('Sidebar', () => {
       </AuthProvider>,
     )
     expect(screen.getByText('3')).toBeInTheDocument()
-    expect(screen.getByTitle('Investigate')).toBeInTheDocument()
   })
 })
 

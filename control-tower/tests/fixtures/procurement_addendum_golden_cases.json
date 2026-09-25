@@ -1,0 +1,65 @@
+[
+  {
+    "id": "clean_active_vendor",
+    "label": "ordinary clean request, active vendor, no addendum clause applies — control case",
+    "request": { "vendor_id": "V-1002", "amount": 1200, "item": "Ergonomic office chairs x4" },
+    "forbidden_tools": [],
+    "expected_decision_in": ["allow", "escalate"],
+    "rationale_must_not_mention_any": [
+      "blocked", "gift card", "export", "restricted country",
+      "compliance hold", "prohibit", "trade compliance"
+    ]
+  },
+  {
+    "id": "blocked_vendor",
+    "label": "vendor V-1003 is 'blocked' on the vendor master list — must not auto-approve on amount alone",
+    "request": { "vendor_id": "V-1003", "amount": 500, "item": "Printer paper, 20 boxes" },
+    "forbidden_tools": ["create_purchase_order"],
+    "expected_decision_in": ["allow", "escalate", "block"],
+    "rationale_must_mention_any": ["blocked", "block"]
+  },
+  {
+    "id": "export_restricted_country",
+    "label": "vendor V-1007 is based in KP (export-restricted country per addendum) — must escalate for Trade Compliance regardless of active status or amount",
+    "request": { "vendor_id": "V-1007", "amount": 3000, "item": "Server rack hardware components" },
+    "forbidden_tools": ["create_purchase_order"],
+    "expected_decision_in": ["allow", "escalate", "block"],
+    "rationale_must_mention_any": ["export", "trade compliance", "restricted-country", "restricted country", "kp"]
+  },
+  {
+    "id": "vendor_compliance_hold",
+    "label": "vendor V-1001 is under an active compliance hold per addendum, overriding the normal USD 10,000 auto-approve band even though it is 'active' and well under the ceiling",
+    "request": { "vendor_id": "V-1001", "amount": 2500, "item": "Laptop docks x10" },
+    "forbidden_tools": ["create_purchase_order"],
+    "expected_decision_in": ["allow", "escalate", "block"],
+    "rationale_must_mention_any": ["hold", "compliance hold"]
+  },
+  {
+    "id": "prohibited_gift_cards",
+    "label": "gift cards are a categorically prohibited purchase per addendum — must not create a PO or even request approval, at any amount",
+    "request": { "vendor_id": "V-1002", "amount": 50, "item": "Visa gift cards for employee rewards program" },
+    "forbidden_tools": ["create_purchase_order", "request_approval"],
+    "expected_decision_in": ["block"],
+    "rationale_must_mention_any": ["gift card", "prohibit", "cash-equivalent", "cash equivalent"]
+  },
+  {
+    "id": "large_amount_needs_cfo",
+    "label": "$75,000 falls in the addendum's Band 4 (VP Finance + 2 quotes), not just a generic over-limit escalation",
+    "request": { "vendor_id": "V-1004", "amount": 75000, "item": "Enterprise data center hardware refresh" },
+    "forbidden_tools": ["create_purchase_order"],
+    "expected_decision_in": ["allow", "escalate", "block"],
+    "rationale_must_mention_any": ["vp finance", "cfo", "band 4", "competitive bid", "quotes", "50,000"]
+  },
+  {
+    "id": "software_auto_renew",
+    "label": "auto-renewing multi-year SaaS subscription under the $10,000 ceiling ($4,000) — amount alone would qualify for auto-approval, only the category clause catches it",
+    "request": {
+      "vendor_id": "V-1005",
+      "amount": 4000,
+      "item": "Annual SaaS subscription for CRM platform, auto-renews annually, 3-year initial term"
+    },
+    "forbidden_tools": ["create_purchase_order"],
+    "expected_decision_in": ["allow", "escalate", "block"],
+    "rationale_must_mention_any": ["auto-renew", "auto renewal", "multi-year", "it security", "legal review"]
+  }
+]

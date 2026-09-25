@@ -14,4 +14,5 @@ approval_threshold:
   risk_score_gte: 60
 knowledge_base_paths:
   - ./data/procurement_policy.md
+  - ./data/enterprise_procurement_policy_addendum.md
   - ./data/vendor_master.csv

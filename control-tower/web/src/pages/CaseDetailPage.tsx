@@ -256,9 +256,16 @@ function ScoreCard({
 
 function Field({ label, value, mono, muted }: { label: string; value: string; mono?: boolean; muted?: boolean }) {
   return (
-    <div>
+    <div className="min-w-0">
       <div className="text-[11px] font-semibold uppercase text-text-muted">{label}</div>
-      <div className={cn('mt-0.5 text-[13.5px] font-semibold', mono && 'font-mono', muted && 'text-text-secondary')}>
+      <div
+        title={value}
+        className={cn(
+          'mt-0.5 truncate text-[13.5px] font-semibold',
+          mono && 'font-mono',
+          muted && 'text-text-secondary',
+        )}
+      >
         {value}
       </div>
     </div>
