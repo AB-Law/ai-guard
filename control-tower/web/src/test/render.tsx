@@ -17,6 +17,7 @@ export function createTestQueryClient() {
 
 export function loginAs(email = 'demo@aegis.dev') {
   localStorage.setItem('aegis.auth.user', JSON.stringify({ email }))
+  localStorage.setItem('aegis.auth.token', 'test-token')
 }
 
 interface Options extends Omit<RenderOptions, 'wrapper'> {
@@ -29,7 +30,10 @@ export function renderApp(ui: ReactElement, options: Options = {}) {
   const { route = '/', routes, authenticated = true, ...rest } = options
   resetMockState()
   if (authenticated) loginAs()
-  else localStorage.removeItem('aegis.auth.user')
+  else {
+    localStorage.removeItem('aegis.auth.user')
+    localStorage.removeItem('aegis.auth.token')
+  }
 
   const client = createTestQueryClient()
   const initialEntries = routes ?? [route]

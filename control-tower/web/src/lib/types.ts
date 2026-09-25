@@ -93,6 +93,14 @@ export interface ProcessTool {
   unit: string
 }
 
+export type UploadedDocKind = 'uploaded' | 'custom'
+
+export interface UploadedDoc {
+  name: string
+  kind: UploadedDocKind
+  path: string
+}
+
 export interface ProcessConfig {
   id: string
   title: string
@@ -101,7 +109,7 @@ export interface ProcessConfig {
   disallowed_tools: string[]
   approval_threshold: { risk_score_gte: number }
   seed_docs: string[]
-  uploaded_docs: string[]
+  uploaded_docs: UploadedDoc[]
 }
 
 export interface ConfigsResponse {

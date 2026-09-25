@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+import yaml
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
@@ -22,7 +23,7 @@ from api import auth
 from api.case_store_db import build_case_store, build_kv_store
 from api.checkpointer import build_checkpointer
 from audit.backend import build_audit_store
-from configs.loader import KNOWN_PROCESSES, load_process
+from configs.loader import ProcessConfig, known_processes, load_process
 from contracts.schemas import ToolCallRequest
 from guardrails import evaluate_tool_call
 from investigation_assistant.qa_agent import (
@@ -30,7 +31,7 @@ from investigation_assistant.qa_agent import (
     entries_for_case,
     investigate,
 )
-from knowledge.rag import KnowledgeBase, build_kb_for_process, uploads_dir
+from knowledge.rag import KnowledgeBase, build_kb_for_process, source_for_path, uploads_dir
 from scripts.demo_pack import REHEARSAL_IDS, load_rehearsal_bodies
 
 _ALLOWED_UPLOAD_SUFFIXES = {".md", ".txt", ".csv"}
@@ -42,6 +43,29 @@ load_dotenv(_PROJECT_ROOT / ".env")
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _slugify(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", text.strip().lower()).strip("_")
+    return slug or "item"
+
+
+CUSTOM_POLICY_DIRNAME = "custom"
+
+
+def _list_uploaded_docs(updir: Path) -> list[dict[str, str]]:
+    """Every file under a process's upload dir, tagged uploaded vs custom —
+    a plain file upload is immutable (delete + re-upload to change it), a
+    custom policy (written via POST /knowledge/policies) can be edited in
+    place because we authored the file ourselves and know its exact shape."""
+    out: list[dict[str, str]] = []
+    for path in sorted(updir.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(updir)
+        kind = "custom" if rel.parts[0] == CUSTOM_POLICY_DIRNAME else "uploaded"
+        out.append({"name": path.name, "kind": kind, "path": str(rel).replace("\\", "/")})
+    return out
 
 
 def _slugify(text: str) -> str:
@@ -130,6 +154,42 @@ class CreateApplicationBody(BaseModel):
     source_app: str | None = None
 
 
+class ProcessToolBody(BaseModel):
+    name: str = Field(min_length=1)
+    max_auto_amount: float | None = None
+    unit: str = ""
+
+
+class CreateProcessBody(BaseModel):
+    """Wizard step 1 — a new process is just a new configs/<id>.yaml; the
+    gateway and dashboard pick it up with zero code changes (ARCHITECTURE.md
+    §4.3, "config-driven process definition")."""
+
+    title: str = Field(min_length=1)
+    allowed_tools: list[ProcessToolBody] = Field(default_factory=list)
+    disallowed_tools: list[str] = Field(default_factory=list)
+    approval_threshold: int = Field(default=60, ge=0, le=100)
+
+
+class UpdateProcessBody(BaseModel):
+    """Wizard step 2 (or a later edit) — partial update, only given fields change."""
+
+    allowed_tools: list[ProcessToolBody] | None = None
+    disallowed_tools: list[str] | None = None
+    approval_threshold: int | None = Field(default=None, ge=0, le=100)
+
+
+class CreatePolicyBody(BaseModel):
+    process: str
+    title: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+
+
+class UpdatePolicyBody(BaseModel):
+    title: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+
+
 class InvestigateBody(BaseModel):
     question: str = Field(min_length=1)
     case_id: str | None = None
@@ -186,7 +246,7 @@ def create_app(
 
     audit = build_audit_store(db_url, sqlite_path=db_path)
     kbs: dict[str, KnowledgeBase] = {
-        name: build_kb_for_process(name, root) for name in KNOWN_PROCESSES
+        name: build_kb_for_process(name, root) for name in known_processes(root / "configs")
     }
     store = build_case_store(
         db_url, sqlite_path=root / "data" / "cases.db", memory_factory=CaseStore
@@ -852,17 +912,17 @@ def create_app(
         """
         title_overrides = {"onboarding_kyc": "Onboarding KYC", "rag_bot": "RAG Bot"}
         out: list[dict[str, Any]] = []
-        for name in KNOWN_PROCESSES:
+        for name in known_processes(root / "configs"):
             try:
                 cfg = load_process(name, configs_dir=root / "configs")
             except (FileNotFoundError, ValueError):
                 continue
             updir = uploads_dir(root, name)
-            uploaded = sorted(p.name for p in updir.glob("*")) if updir.is_dir() else []
+            uploaded = _list_uploaded_docs(updir) if updir.is_dir() else []
             out.append(
                 {
                     "id": name,
-                    "title": title_overrides.get(name, name.replace("_", " ").title()),
+                    "title": cfg.title or title_overrides.get(name, name.replace("_", " ").title()),
                     "config_path": f"configs/{name}.yaml",
                     "allowed_tools": [t.model_dump() for t in cfg.allowed_tools],
                     "disallowed_tools": cfg.disallowed_tools,
@@ -873,9 +933,146 @@ def create_app(
             )
         return {"processes": out}
 
+    def _write_process_yaml(process_id: str, cfg: dict[str, Any]) -> None:
+        path = root / "configs" / f"{process_id}.yaml"
+        path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+
+    @app.post("/configs", dependencies=[Depends(require_dashboard_token)])
+    def create_process(body: CreateProcessBody) -> dict[str, Any]:
+        configs_dir = root / "configs"
+        configs_dir.mkdir(parents=True, exist_ok=True)
+        slug = _slugify(body.title)
+        process_id = slug
+        i = 1
+        while (configs_dir / f"{process_id}.yaml").is_file():
+            i += 1
+            process_id = f"{slug}_{i}"
+        cfg = {
+            "process": process_id,
+            "title": body.title,
+            "allowed_tools": [t.model_dump() for t in body.allowed_tools],
+            "disallowed_tools": body.disallowed_tools,
+            "required_evidence_docs": [],
+            "approval_threshold": {"risk_score_gte": body.approval_threshold},
+            "knowledge_base_paths": [],
+        }
+        _write_process_yaml(process_id, cfg)
+        return {
+            "id": process_id,
+            "title": body.title,
+            "config_path": f"configs/{process_id}.yaml",
+            "allowed_tools": cfg["allowed_tools"],
+            "disallowed_tools": cfg["disallowed_tools"],
+            "approval_threshold": cfg["approval_threshold"],
+            "seed_docs": [],
+            "uploaded_docs": [],
+        }
+
+    @app.put("/configs/{process_id}", dependencies=[Depends(require_dashboard_token)])
+    def update_process(process_id: str, body: UpdateProcessBody) -> dict[str, Any]:
+        configs_dir = root / "configs"
+        path = configs_dir / f"{process_id}.yaml"
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail=f"unknown process {process_id!r}")
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if body.allowed_tools is not None:
+            raw["allowed_tools"] = [t.model_dump() for t in body.allowed_tools]
+        if body.disallowed_tools is not None:
+            raw["disallowed_tools"] = body.disallowed_tools
+        if body.approval_threshold is not None:
+            raw["approval_threshold"] = {"risk_score_gte": body.approval_threshold}
+        try:
+            ProcessConfig.model_validate(raw)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _write_process_yaml(process_id, raw)
+        return {"id": process_id, "config_path": f"configs/{process_id}.yaml"}
+
+    @app.post("/knowledge/policies", dependencies=[Depends(require_dashboard_token)])
+    def create_policy(body: CreatePolicyBody) -> dict[str, Any]:
+        """A policy authored directly in the dashboard (vs. an uploaded file)
+        — stored as its own markdown file under uploads/<process>/custom/ so
+        it round-trips through the exact same RAG indexing as any other
+        policy doc, but is tagged 'custom' in /configs so the UI knows it can
+        be edited in place instead of only deleted."""
+        try:
+            load_process(body.process, configs_dir=root / "configs")
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        custom_dir = uploads_dir(root, body.process) / CUSTOM_POLICY_DIRNAME
+        custom_dir.mkdir(parents=True, exist_ok=True)
+        slug = _slugify(body.title)
+        dest = custom_dir / f"{slug}.md"
+        i = 1
+        while dest.exists():
+            i += 1
+            dest = custom_dir / f"{slug}_{i}.md"
+        dest.write_text(f"## {body.title}\n\n{body.content}\n", encoding="utf-8")
+
+        kb = _kb_for(body.process)
+        before = kb.size
+        kb.index_seed([dest], project_root=root)
+        return {
+            "ok": True,
+            "name": dest.name,
+            "path": f"{CUSTOM_POLICY_DIRNAME}/{dest.name}",
+            "chunks_added": kb.size - before,
+            "kb_size": kb.size,
+            "process": body.process,
+        }
+
+    def _resolve_upload_path(process: str, rel_path: str) -> Path:
+        base = uploads_dir(root, process).resolve()
+        dest = (base / rel_path).resolve()
+        if base not in dest.parents:
+            raise HTTPException(status_code=400, detail="invalid document path")
+        return dest
+
+    @app.put(
+        "/knowledge/policies/{process}/{filename}",
+        dependencies=[Depends(require_dashboard_token)],
+    )
+    def update_policy(process: str, filename: str, body: UpdatePolicyBody) -> dict[str, Any]:
+        dest = _resolve_upload_path(process, f"{CUSTOM_POLICY_DIRNAME}/{filename}")
+        if not dest.is_file():
+            raise HTTPException(status_code=404, detail="custom policy not found")
+        kb = _kb_for(process)
+        kb.remove_source(source_for_path(dest))
+        dest.write_text(f"## {body.title}\n\n{body.content}\n", encoding="utf-8")
+        before = kb.size
+        kb.index_seed([dest], project_root=root)
+        return {"ok": True, "name": dest.name, "chunks_added": kb.size - before, "kb_size": kb.size}
+
+    @app.get(
+        "/knowledge/policies/{process}/{filename}",
+        dependencies=[Depends(require_dashboard_token)],
+    )
+    def get_policy(process: str, filename: str) -> dict[str, Any]:
+        dest = _resolve_upload_path(process, f"{CUSTOM_POLICY_DIRNAME}/{filename}")
+        if not dest.is_file():
+            raise HTTPException(status_code=404, detail="custom policy not found")
+        return {"name": dest.name, "content": dest.read_text(encoding="utf-8")}
+
+    @app.delete(
+        "/knowledge/documents/{process}/{doc_path:path}",
+        dependencies=[Depends(require_dashboard_token)],
+    )
+    def delete_document(process: str, doc_path: str) -> dict[str, Any]:
+        """Deletes any upload — plain file or custom policy — and drops its
+        chunks from the live KB. This is the only way to change an uploaded
+        (non-custom) document: delete it, then upload the replacement."""
+        dest = _resolve_upload_path(process, doc_path)
+        if not dest.is_file():
+            raise HTTPException(status_code=404, detail="document not found")
+        kb = _kb_for(process)
+        removed = kb.remove_source(source_for_path(dest))
+        dest.unlink()
+        return {"ok": True, "removed_chunks": removed, "kb_size": kb.size}
+
     @app.post("/applications", dependencies=[Depends(require_dashboard_token)])
     def create_application(body: CreateApplicationBody) -> dict[str, Any]:
-        if body.process not in KNOWN_PROCESSES:
+        if body.process not in known_processes(root / "configs"):
             raise HTTPException(status_code=400, detail=f"unknown process {body.process!r}")
         app_id = f"app_{uuid.uuid4().hex[:12]}"
         source_app = body.source_app or _slugify(body.name)

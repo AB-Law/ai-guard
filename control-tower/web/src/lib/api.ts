@@ -11,21 +11,60 @@ import type {
   CaseAuditResponse,
   CaseRecord,
   ConfigsResponse,
+  ProcessConfig,
   TrafficRecentResponse,
 } from './types'
 
 const BASE = '/api'
+const TOKEN_KEY = 'aegis.auth.token'
+
+// Read fresh from storage on every call rather than caching in a module
+// variable — AuthProvider writes here directly on login/logout and this
+// module has no way to know when that happens otherwise.
+export function getToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function setToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token)
+    else localStorage.removeItem(TOKEN_KEY)
+  } catch {
+    // localStorage unavailable — session just won't survive a refresh.
+  }
+}
+
+/** Dispatched when a request 401s so AuthProvider can drop the stale session
+ * and bounce to /login, without api.ts importing React/router. */
+export const UNAUTHORIZED_EVENT = 'aegis:unauthorized'
+
+function authHeaders(): Record<string, string> {
+  const token = getToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     ...init,
   })
+  if (res.status === 401) {
+    setToken(null)
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+  }
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
     throw new Error(`${init?.method ?? 'GET'} ${path} failed: ${res.status} ${detail}`)
   }
   return res.json() as Promise<T>
+}
+
+export function login(password: string): Promise<{ access_token: string; token_type: string }> {
+  return request('/auth/login', { method: 'POST', body: JSON.stringify({ password }) })
 }
 
 export function health(): Promise<{ status: string }> {
@@ -112,6 +151,68 @@ export function listConfigs(): Promise<ConfigsResponse> {
   return request('/configs')
 }
 
+export interface ProcessToolInput {
+  name: string
+  max_auto_amount: number | null
+  unit: string
+}
+
+export interface CreateProcessInput {
+  title: string
+  allowed_tools?: ProcessToolInput[]
+  disallowed_tools?: string[]
+  approval_threshold?: number
+}
+
+export function createProcess(input: CreateProcessInput): Promise<ProcessConfig> {
+  return request('/configs', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export interface UpdateProcessInput {
+  allowed_tools?: ProcessToolInput[]
+  disallowed_tools?: string[]
+  approval_threshold?: number
+}
+
+export function updateProcess(id: string, input: UpdateProcessInput): Promise<{ id: string }> {
+  return request(`/configs/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(input) })
+}
+
+export interface CreatePolicyInput {
+  process: string
+  title: string
+  content: string
+}
+
+export function createPolicy(
+  input: CreatePolicyInput,
+): Promise<{ ok: boolean; name: string; path: string; chunks_added: number; kb_size: number }> {
+  return request('/knowledge/policies', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function getPolicy(process: string, filename: string): Promise<{ name: string; content: string }> {
+  return request(`/knowledge/policies/${encodeURIComponent(process)}/${encodeURIComponent(filename)}`)
+}
+
+export function updatePolicy(
+  process: string,
+  filename: string,
+  input: { title: string; content: string },
+): Promise<{ ok: boolean; name: string; chunks_added: number; kb_size: number }> {
+  return request(`/knowledge/policies/${encodeURIComponent(process)}/${encodeURIComponent(filename)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export function deleteDocument(
+  process: string,
+  docPath: string,
+): Promise<{ ok: boolean; removed_chunks: number; kb_size: number }> {
+  const encodedPath = docPath.split('/').map(encodeURIComponent).join('/')
+  return request(`/knowledge/documents/${encodeURIComponent(process)}/${encodedPath}`, { method: 'DELETE' })
+}
+
 export interface AuditEntriesParams {
   limit?: number
   offset?: number
@@ -158,7 +259,11 @@ export async function uploadDocument(file: File, process: string): Promise<{ ok:
   const form = new FormData()
   form.append('file', file)
   form.append('process', process)
-  const res = await fetch(`${BASE}/knowledge/documents`, { method: 'POST', body: form })
+  const res = await fetch(`${BASE}/knowledge/documents`, { method: 'POST', body: form, headers: authHeaders() })
+  if (res.status === 401) {
+    setToken(null)
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+  }
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
     throw new Error(`upload failed: ${res.status} ${detail}`)

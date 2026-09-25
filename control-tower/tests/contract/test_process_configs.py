@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from configs.loader import KNOWN_PROCESSES, load_process
+from configs.loader import known_processes, load_process
 
 _EXPECTED = {
     "procurement_review": {
@@ -39,7 +39,7 @@ _EXPECTED = {
 
 
 def test_known_processes_cover_expected_set() -> None:
-    assert set(KNOWN_PROCESSES) == set(_EXPECTED)
+    assert set(known_processes()) == set(_EXPECTED)
 
 
 def test_each_process_yaml_matches_contract() -> None:

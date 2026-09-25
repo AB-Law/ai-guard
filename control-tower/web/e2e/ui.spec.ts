@@ -113,6 +113,9 @@ async function mockApi(page: Page) {
       })
 
     if (path.endsWith('/health') || path === '/health') return json({ status: 'ok' })
+    if (path.endsWith('/auth/login') && method === 'POST') {
+      return json({ access_token: 'e2e-token', token_type: 'bearer' })
+    }
     if (path.includes('/traffic/recent')) return json(traffic)
     if (path.endsWith('/cases') && method === 'GET') return json({ cases: [caseRow] })
     if (path.match(/\/cases\/[^/]+\/audit$/)) return json({ case_id: 'CASE-ALLOW', entries, chain_valid: true })
@@ -122,7 +125,10 @@ async function mockApi(page: Page) {
     }
     if (path.endsWith('/approvals') && method === 'GET') return json({ approvals, count: approvals.length })
     if (path.includes('/approvals/') && method === 'POST') return json({ ...caseRow, status: 'completed' })
-    if (path.endsWith('/configs')) return json(configs)
+    if (path.match(/\/configs\/[^/]+$/) && method === 'PUT') {
+      return json({ id: path.split('/').pop() })
+    }
+    if (path.endsWith('/configs') && method === 'GET') return json(configs)
     if (path.endsWith('/applications') && method === 'GET') return json({ applications: [] })
     if (path.endsWith('/applications') && method === 'POST') {
       return json({
@@ -169,7 +175,9 @@ async function mockApi(page: Page) {
 
 async function login(page: Page) {
   await page.goto('/login')
-  await page.getByRole('button', { name: 'Continue as demo user' }).click()
+  await page.getByPlaceholder('you@company.com').fill('e2e@aegis.dev')
+  await page.getByPlaceholder('••••••••').fill('e2e-password')
+  await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page.getByText('Live Traffic')).toBeVisible()
 }
 
@@ -198,11 +206,23 @@ test.describe('Control Tower UI (mocked API)', () => {
   test('applications create key', async ({ page }) => {
     await login(page)
     await page.getByTitle('Applications').click()
-    await page.getByRole('button', { name: /New application/i }).click()
+    await page.getByRole('link', { name: /New application/i }).click()
+
+    await page.getByRole('button', { name: 'Use an existing process' }).click()
+    await page.getByText('Procurement Review').click()
+    await page.getByRole('button', { name: 'Next' }).click()
+
+    await expect(page.getByText(/Guardrails for/i)).toBeVisible()
+    await page.getByRole('button', { name: 'Next' }).click()
+
+    await expect(page.getByText(/Knowledge base —/i)).toBeVisible()
+    await page.getByRole('button', { name: 'Next' }).click()
+
+    await expect(page.getByText(/Connect the agent/i)).toBeVisible()
     await page.getByPlaceholder('Claims Review Agent').fill('E2E Agent')
-    await page.locator('select').nth(1).selectOption('procurement_review')
     await page.getByRole('button', { name: /Create & generate key/i }).click()
-    await expect(page.getByText(/E2E Agent connected/i)).toBeVisible()
+
+    await expect(page.getByText(/E2E Agent is connected/i)).toBeVisible()
     await expect(page.getByText('aeg_e2e_secret')).toBeVisible()
   })
 
@@ -218,7 +238,7 @@ test.describe('Control Tower UI (mocked API)', () => {
 
     await page.getByTitle('Config').click()
     await expect(page.getByText('Procurement Review').first()).toBeVisible()
-    await expect(page.getByText('create_purchase_order')).toBeVisible()
+    await expect(page.locator('input[value="create_purchase_order"]')).toBeVisible()
   })
 
   test('guards unauthenticated routes', async ({ page }) => {

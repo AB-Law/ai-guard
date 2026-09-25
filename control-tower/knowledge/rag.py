@@ -50,6 +50,16 @@ class DeterministicHashEmbedding(EmbeddingFunction[Documents]):
         return [v / norm for v in vec]
 
 
+def source_for_path(path: str | Path) -> str:
+    """The `source` metadata a chunk from `path` is indexed under — project-root-
+    relative when possible, so a caller who only has a path (e.g. deleting an
+    upload) can compute the same key `_load_file` used without re-indexing."""
+    p = Path(path)
+    if not p.is_absolute():
+        p = (_PROJECT_ROOT / p).resolve()
+    return str(p.relative_to(_PROJECT_ROOT)) if _PROJECT_ROOT in p.parents else p.name
+
+
 @dataclass(frozen=True)
 class RetrievedChunk:
     id: str
@@ -135,6 +145,17 @@ class KnowledgeBase:
     def get_by_id(self, chunk_id: str) -> RetrievedChunk | None:
         return self._docs.get(chunk_id)
 
+    def remove_source(self, source: str) -> int:
+        """Drop every chunk indexed from `source` (a deleted or edited-in-place
+        upload) — the counterpart to index_seed for one file. Returns the
+        number of chunks removed."""
+        ids = [cid for cid, chunk in self._docs.items() if chunk.source == source]
+        if ids:
+            self._collection.delete(ids=ids)
+            for cid in ids:
+                del self._docs[cid]
+        return len(ids)
+
     def all_chunks(self) -> list[RetrievedChunk]:
         """Every indexed chunk, in insertion order — lets a caller pull the
         full, small, bounded policy text deterministically instead of
@@ -143,7 +164,7 @@ class KnowledgeBase:
 
     def _load_file(self, path: Path) -> list[tuple[str, str, str]]:
         name = path.name.lower()
-        source = str(path.relative_to(_PROJECT_ROOT)) if _PROJECT_ROOT in path.parents else path.name
+        source = source_for_path(path)
 
         if name.endswith(".csv"):
             return self._load_vendor_csv(path, source)
@@ -243,7 +264,9 @@ def seed_paths_for_process(
             paths.append(injected)
     uploads = uploads_dir(root, process)
     if uploads.is_dir():
-        for path in sorted(uploads.iterdir()):
+        # rglob, not iterdir: custom (editor-authored) policies live one level
+        # down in uploads/<process>/custom/ alongside plain file uploads.
+        for path in sorted(uploads.rglob("*")):
             if path.is_file() and path.resolve() not in seen:
                 seen.add(path.resolve())
                 paths.append(path)
@@ -252,11 +275,11 @@ def seed_paths_for_process(
 def default_seed_paths(project_root: Path | None = None) -> list[Path]:
     """Union of all known process KB paths, injected quote, and process-scoped uploads."""
     root = project_root or _PROJECT_ROOT
-    from configs.loader import KNOWN_PROCESSES
+    from configs.loader import known_processes
 
     paths: list[Path] = []
     seen: set[Path] = set()
-    for name in KNOWN_PROCESSES:
+    for name in known_processes(root / "configs"):
         for path in seed_paths_for_process(name, root):
             resolved = path.resolve()
             if resolved not in seen:

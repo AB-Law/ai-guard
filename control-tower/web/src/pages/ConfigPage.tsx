@@ -1,34 +1,61 @@
-import { useRef, useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
-import { Upload } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Plus } from 'lucide-react'
 import { PageHeader } from '../components/layout/PageHeader'
 import { Card } from '../components/ui/Card'
 import { Badge } from '../components/ui/Badge'
+import { Button, buttonStyles } from '../components/ui/Button'
 import { cn } from '../lib/utils'
 import { useActiveProcess } from '../lib/processConfig'
-import * as api from '../lib/api'
-import type { ProcessTool } from '../lib/types'
+import { useUpdateProcess } from '../lib/queries'
+import { ToolsEditor, type ToolsValue } from '../components/process/ToolsEditor'
+import { KnowledgeBaseEditor } from '../components/process/KnowledgeBaseEditor'
 
-function formatLimit(t: ProcessTool): string {
-  if (t.max_auto_amount == null) return 'max auto: unlimited'
-  if (t.unit === 'usd') return `max auto: $${t.max_auto_amount.toLocaleString()}`
-  return `max auto: ${t.max_auto_amount.toLocaleString()} ${t.unit}`
+function toToolsValue(cfg: {
+  allowed_tools: { name: string; max_auto_amount: number | null; unit: string }[]
+  disallowed_tools: string[]
+  approval_threshold: { risk_score_gte: number }
+}): ToolsValue {
+  return {
+    allowedTools: cfg.allowed_tools.map((t) => ({ ...t })),
+    disallowedTools: [...cfg.disallowed_tools],
+    approvalThreshold: cfg.approval_threshold.risk_score_gte,
+  }
 }
 
 export function ConfigPage() {
   const { active, processes, isLoading, setActiveId } = useActiveProcess()
-  const fileInput = useRef<HTMLInputElement>(null)
-  const [uploadNote, setUploadNote] = useState<string | null>(null)
+  const updateProcess = useUpdateProcess()
+  const [draft, setDraft] = useState<ToolsValue | null>(null)
+  const [saveNote, setSaveNote] = useState<string | null>(null)
 
-  const upload = useMutation({
-    mutationFn: (file: File) => api.uploadDocument(file, active?.id ?? ''),
-    onSuccess: (_res, file) => setUploadNote(`${file.name} indexed into ${active?.title}`),
-    onError: (err: Error) => setUploadNote(err.message),
-  })
+  // Keyed on id, not the whole object: a save triggers a configs refetch,
+  // which gives `active` a new reference for the SAME process — that must
+  // not wipe the just-set "Saved." note a moment later.
+  useEffect(() => {
+    if (active) setDraft(toToolsValue(active))
+    setSaveNote(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id])
 
-  function handleFiles(files: FileList | null) {
-    const file = files?.[0]
-    if (file && active) upload.mutate(file)
+  const dirty =
+    !!active &&
+    !!draft &&
+    JSON.stringify(draft) !== JSON.stringify(toToolsValue(active))
+
+  function save() {
+    if (!active || !draft) return
+    updateProcess.mutate(
+      {
+        id: active.id,
+        input: {
+          allowed_tools: draft.allowedTools,
+          disallowed_tools: draft.disallowedTools,
+          approval_threshold: draft.approvalThreshold,
+        },
+      },
+      { onSuccess: () => setSaveNote('Saved.'), onError: (e: Error) => setSaveNote(e.message) },
+    )
   }
 
   return (
@@ -37,6 +64,12 @@ export function ConfigPage() {
         title="Config & knowledge base"
         subtitle="Real process configs, parsed live from configs/*.yaml — the same file the gateway enforces against"
         showProcessSwitcher={false}
+        actions={
+          <Link to="/processes/new" className={buttonStyles({ variant: 'accent' })}>
+            <Plus size={14} strokeWidth={2.2} />
+            New process
+          </Link>
+        }
       />
 
       <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-6 lg:px-8 lg:py-[26px]">
@@ -61,74 +94,31 @@ export function ConfigPage() {
           ))}
         </div>
 
-        {active && (
+        {active && draft && (
           <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-2">
             <Card className="flex flex-col gap-3.5 px-5 py-[18px]">
-              <div className="text-[13px] font-bold text-text-secondary">{active.title} — allow-listed tools</div>
-              <div className="flex flex-col gap-1.5">
-                {active.allowed_tools.map((t) => (
-                  <div key={t.name} className="flex items-center justify-between rounded-lg bg-surface-2 px-3 py-2.5 text-[12.5px]">
-                    <span className="font-mono">{t.name}</span>
-                    <span className="text-text-muted">{formatLimit(t)}</span>
-                  </div>
-                ))}
+              <div className="flex items-center justify-between">
+                <div className="text-[13px] font-bold text-text-secondary">{active.title} — policy</div>
+                {dirty && (
+                  <Button variant="accent" size="sm" onClick={save} disabled={updateProcess.isPending}>
+                    {updateProcess.isPending ? 'Saving…' : 'Save changes'}
+                  </Button>
+                )}
               </div>
-              <div className="mt-1 text-xs font-bold text-danger">Disallowed</div>
-              <div className="flex flex-wrap gap-1.5">
-                {active.disallowed_tools.map((d) => (
-                  <span key={d} className="rounded-md bg-danger-soft px-2.5 py-1 font-mono text-[11.5px] text-danger">
-                    {d}
-                  </span>
-                ))}
-              </div>
+              <ToolsEditor value={draft} onChange={setDraft} />
+              {saveNote && <div className="text-xs text-text-secondary">{saveNote}</div>}
               <div className="text-[11.5px] leading-snug text-text-muted">
                 Any tool not listed as allowed above is blocked by default — the gateway checks "is this on the
                 allow-list", not "is this on the block-list" (least privilege, ARCHITECTURE.md §9).
               </div>
-              <div className="mt-1 flex justify-between border-t border-border pt-3 text-[12.5px]">
-                <span className="text-text-muted">Approval threshold</span>
-                <span className="font-mono font-bold">risk_score ≥ {active.approval_threshold.risk_score_gte}</span>
-              </div>
             </Card>
 
-            <Card className="flex flex-col gap-3.5 px-5 py-[18px]">
-              <div className="text-[13px] font-bold text-text-secondary">Knowledge base — {active.title}</div>
-              <button
-                onClick={() => fileInput.current?.click()}
-                className="flex flex-col items-center gap-2 rounded-xl border-[1.5px] border-dashed border-border px-6 py-[26px] text-text-secondary hover:border-accent hover:text-text-primary"
-              >
-                <Upload size={22} strokeWidth={1.6} />
-                <span className="text-[12.5px] font-semibold">
-                  {upload.isPending ? 'Uploading…' : 'Drop a .md / .txt / .csv policy document'}
-                </span>
-                <span className="text-[11.5px] text-text-muted">Indexed into the live KB immediately — no restart</span>
-              </button>
-              <input
-                ref={fileInput}
-                type="file"
-                accept=".md,.txt,.csv"
-                className="hidden"
-                onChange={(e) => handleFiles(e.target.files)}
-              />
-              {uploadNote && <div className="text-xs text-text-secondary">{uploadNote}</div>}
-              <div className="flex flex-col gap-1.5">
-                {active.seed_docs.map((doc) => (
-                  <div key={doc} className="flex items-center justify-between rounded-lg bg-surface-2 px-3 py-2.5 text-[12.5px]">
-                    <span className="font-mono">{doc}</span>
-                    <span className="text-text-muted">seed</span>
-                  </div>
-                ))}
-                {active.uploaded_docs.map((doc) => (
-                  <div key={doc} className="flex items-center justify-between rounded-lg bg-surface-2 px-3 py-2.5 text-[12.5px]">
-                    <span className="font-mono">{doc}</span>
-                    <span className="text-success">uploaded</span>
-                  </div>
-                ))}
-                {active.seed_docs.length === 0 && active.uploaded_docs.length === 0 && (
-                  <div className="text-xs text-text-muted">No documents indexed yet.</div>
-                )}
-              </div>
-            </Card>
+            <KnowledgeBaseEditor
+              processId={active.id}
+              processTitle={active.title}
+              seedDocs={active.seed_docs}
+              uploadedDocs={active.uploaded_docs}
+            />
           </div>
         )}
       </div>

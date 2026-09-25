@@ -6,6 +6,7 @@ import { ProtectedRoute } from './components/ProtectedRoute'
 import { LoginPage } from './pages/LoginPage'
 import { OverviewPage } from './pages/OverviewPage'
 import { ApplicationsPage } from './pages/ApplicationsPage'
+import { ProcessWizardPage } from './pages/ProcessWizardPage'
 import { ApprovalsPage } from './pages/ApprovalsPage'
 import { CaseDetailPage } from './pages/CaseDetailPage'
 import { LogsPage } from './pages/LogsPage'
@@ -21,6 +22,7 @@ export function AppRoutes() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
       <Route path="/applications" element={<ProtectedRoute><ApplicationsPage /></ProtectedRoute>} />
+      <Route path="/processes/new" element={<ProtectedRoute><ProcessWizardPage /></ProtectedRoute>} />
       <Route path="/approvals" element={<ProtectedRoute><ApprovalsPage /></ProtectedRoute>} />
       <Route path="/cases/:caseId" element={<ProtectedRoute><CaseDetailPage /></ProtectedRoute>} />
       <Route path="/logs" element={<ProtectedRoute><LogsPage /></ProtectedRoute>} />
