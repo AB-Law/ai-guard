@@ -100,10 +100,18 @@ export function useConfigs() {
   })
 }
 
-export function useCreateProcess() {
+export function useProcessSchema() {
+  return useQuery({
+    queryKey: ['process-schema'],
+    queryFn: api.getProcessSchema,
+    staleTime: 5 * 60_000,
+  })
+}
+
+export function useCreateProcessFromSchema() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: api.createProcess,
+    mutationFn: api.createProcessFromSchema,
     onSuccess: () => client.invalidateQueries({ queryKey: ['configs'] }),
   })
 }

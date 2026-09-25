@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Check, Copy, TriangleAlert } from 'lucide-react'
 import { PageHeader } from '../components/layout/PageHeader'
@@ -8,96 +8,163 @@ import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { ToolsEditor, type ToolsValue } from '../components/process/ToolsEditor'
 import { KnowledgeBaseEditor } from '../components/process/KnowledgeBaseEditor'
-import { useConfigs, useCreateApplication, useCreateProcess, useUpdateProcess } from '../lib/queries'
+import {
+  useConfigs,
+  useCreateApplication,
+  useCreateProcessFromSchema,
+  useProcessSchema,
+  useUpdateProcess,
+} from '../lib/queries'
+import { ProcessValidationError, type ProcessConfigPayload } from '../lib/api'
+import {
+  evidenceEnumFromSchema,
+  fieldErrorMap,
+  slugifyProcessId,
+  validateAgainstSchema,
+} from '../lib/processSchema'
 import { cn } from '../lib/utils'
 import type { AppEnvironment, ApplicationWithKey, ProcessConfig } from '../lib/types'
 
-const STEPS = ['Process', 'Thresholds', 'Policy', 'Connect agent'] as const
+const STEPS = ['Process', 'Policy', 'Connect agent'] as const
 
-const DEFAULT_TOOLS: ToolsValue = { allowedTools: [], disallowedTools: [], approvalThreshold: 60 }
+const DEFAULT_TOOLS: ToolsValue = {
+  allowedTools: [],
+  disallowedTools: [],
+  approvalThreshold: 60,
+  requiredEvidenceDocs: [],
+}
 
 function toToolsValue(cfg: ProcessConfig): ToolsValue {
   return {
     allowedTools: cfg.allowed_tools.map((t) => ({ ...t })),
     disallowedTools: [...cfg.disallowed_tools],
     approvalThreshold: cfg.approval_threshold.risk_score_gte,
+    requiredEvidenceDocs: [],
   }
 }
 
-/** Four-step onboarding wizard: pick or create the process a new agent will
- * be governed by, set its guardrails, give it something to ground against,
- * then issue the agent its key — the steps in that order because each one
- * needs the last (you can't set thresholds on a process that doesn't exist
- * yet, or connect an agent to a process with no policy behind it). */
+function buildPayload(
+  processId: string,
+  title: string,
+  tools: ToolsValue,
+): ProcessConfigPayload {
+  return {
+    process: processId,
+    title: title.trim() || null,
+    allowed_tools: tools.allowedTools,
+    disallowed_tools: tools.disallowedTools,
+    required_evidence_docs: tools.requiredEvidenceDocs ?? [],
+    approval_threshold: { risk_score_gte: tools.approvalThreshold },
+    knowledge_base_paths: [],
+  }
+}
+
+/** Three-step onboarding: schema-driven process config (or pick existing),
+ * policy KB, then connect an agent with an API key. */
 export function ProcessWizardPage() {
   const navigate = useNavigate()
   const { data: configsResponse } = useConfigs()
+  const { data: schema } = useProcessSchema()
   const processes = configsResponse?.processes ?? []
-  const createProcess = useCreateProcess()
+  const createFromSchema = useCreateProcessFromSchema()
   const updateProcess = useUpdateProcess()
   const createApp = useCreateApplication()
 
-  // `process` is set once (on create, or on picking an existing one) so the
-  // wizard has an id to work with immediately — but step 2's policy editor
-  // then mutates that same process's docs via /knowledge/policies, which
-  // invalidates the ['configs'] query. Re-deriving from the live list on
-  // every render (instead of trusting the one-time snapshot) is what makes
-  // a newly written policy actually show up without leaving the wizard.
+  const evidenceOptions = useMemo(
+    () => (schema ? evidenceEnumFromSchema(schema) : []),
+    [schema],
+  )
+
   const [step, setStep] = useState(0)
   const [mode, setMode] = useState<'new' | 'existing'>('new')
   const [title, setTitle] = useState('')
+  const [processId, setProcessId] = useState('')
+  const [processIdTouched, setProcessIdTouched] = useState(false)
   const [existingId, setExistingId] = useState('')
   const [processSnapshot, setProcess] = useState<ProcessConfig | null>(null)
-  const process = processSnapshot ? (processes.find((p) => p.id === processSnapshot.id) ?? processSnapshot) : null
+  const process = processSnapshot
+    ? (processes.find((p) => p.id === processSnapshot.id) ?? processSnapshot)
+    : null
   const [tools, setTools] = useState<ToolsValue>(DEFAULT_TOOLS)
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
 
   const [appName, setAppName] = useState('')
   const [environment, setEnvironment] = useState<AppEnvironment>('production')
   const [created, setCreated] = useState<ApplicationWithKey | null>(null)
 
-  async function handleStep1Next() {
+  function onTitleChange(next: string) {
+    setTitle(next)
+    if (!processIdTouched) setProcessId(slugifyProcessId(next))
+  }
+
+  function runInlineValidation(payload: ProcessConfigPayload): boolean {
+    if (!schema) return true
+    const errors = validateAgainstSchema(schema, payload)
+    if (errors.length === 0) {
+      setFieldErrors({})
+      return true
+    }
+    setFieldErrors(fieldErrorMap(errors))
+    return false
+  }
+
+  async function handleStep0Next() {
     setError(null)
+    setFieldErrors({})
     if (mode === 'existing') {
       const cfg = processes.find((p) => p.id === existingId)
       if (!cfg) {
         setError('Pick a process to continue.')
         return
       }
-      setProcess(cfg)
-      setTools(toToolsValue(cfg))
-      setStep(1)
+      try {
+        await updateProcess.mutateAsync({
+          id: cfg.id,
+          input: {
+            allowed_tools: tools.allowedTools,
+            disallowed_tools: tools.disallowedTools,
+            approval_threshold: tools.approvalThreshold,
+          },
+        })
+        setProcess(cfg)
+        setStep(1)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Could not save thresholds.')
+      }
       return
     }
-    if (!title.trim()) {
+
+    const id = processId.trim() || slugifyProcessId(title)
+    if (!title.trim() && !id) {
       setError('Give the new process a name.')
       return
     }
+    if (!id) {
+      setFieldErrors({ process: 'process id is required' })
+      setError('Give the new process a name.')
+      return
+    }
+
+    const payload = buildPayload(id, title, tools)
+    if (!runInlineValidation(payload)) {
+      setError('Fix the highlighted fields before continuing.')
+      return
+    }
+
     try {
-      const cfg = await createProcess.mutateAsync({ title: title.trim() })
+      const cfg = await createFromSchema.mutateAsync(payload)
       setProcess(cfg)
       setTools(toToolsValue(cfg))
       setStep(1)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not create the process.')
-    }
-  }
-
-  async function handleStep2Next() {
-    if (!process) return
-    setError(null)
-    try {
-      await updateProcess.mutateAsync({
-        id: process.id,
-        input: {
-          allowed_tools: tools.allowedTools,
-          disallowed_tools: tools.disallowedTools,
-          approval_threshold: tools.approvalThreshold,
-        },
-      })
-      setStep(2)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not save thresholds.')
+      if (e instanceof ProcessValidationError || (e instanceof Error && e.name === 'ProcessValidationError')) {
+        const errs = e instanceof ProcessValidationError ? e.errors : []
+        if (errs.length) setFieldErrors(fieldErrorMap(errs))
+        setError(e.message)
+      } else {
+        setError(e instanceof Error ? e.message : 'Could not create the process.')
+      }
     }
   }
 
@@ -121,11 +188,13 @@ export function ProcessWizardPage() {
     }
   }
 
+  const pending = createFromSchema.isPending || updateProcess.isPending
+
   return (
     <>
       <PageHeader
         title="Connect a new agent"
-        subtitle="Pick or create the process it's governed by, then set thresholds, policy, and its key — in order"
+        subtitle="Define the process config the gateway enforces, attach policy, then issue the agent its key"
         showProcessSwitcher={false}
       />
 
@@ -166,7 +235,10 @@ export function ProcessWizardPage() {
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setMode('new')}
+                  onClick={() => {
+                    setMode('new')
+                    setTools(DEFAULT_TOOLS)
+                  }}
                   className={cn(
                     'flex-1 rounded-lg border-[1.5px] px-4 py-2.5 text-[12.5px] font-semibold',
                     mode === 'new' ? 'border-accent bg-accent-soft text-accent' : 'border-border text-text-secondary',
@@ -189,35 +261,86 @@ export function ProcessWizardPage() {
               </div>
 
               {mode === 'new' ? (
-                <label className="flex flex-col gap-1.5 text-xs font-semibold text-text-secondary">
-                  Process name
-                  <Input
-                    placeholder="Claims Review"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
+                <>
+                  <label className="flex flex-col gap-1.5 text-xs font-semibold text-text-secondary">
+                    Process name
+                    <Input
+                      placeholder="Claims Review"
+                      value={title}
+                      onChange={(e) => onTitleChange(e.target.value)}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-xs font-semibold text-text-secondary">
+                    Process id
+                    <Input
+                      placeholder="claims_review"
+                      value={processId}
+                      onChange={(e) => {
+                        setProcessIdTouched(true)
+                        setProcessId(e.target.value)
+                      }}
+                      className="font-mono"
+                      aria-invalid={Boolean(fieldErrors.process)}
+                    />
+                    {fieldErrors.process && (
+                      <span className="text-[11.5px] font-normal text-danger">{fieldErrors.process}</span>
+                    )}
+                    <span className="text-[11.5px] font-normal text-text-muted">
+                      Writes configs/&lt;id&gt;.yaml the gateway enforces immediately — no code changes.
+                    </span>
+                  </label>
+                  <ToolsEditor
+                    value={tools}
+                    onChange={(next) => {
+                      setTools(next)
+                      if (schema) {
+                        const payload = buildPayload(
+                          processId.trim() || slugifyProcessId(title) || 'process',
+                          title,
+                          next,
+                        )
+                        const errors = validateAgainstSchema(schema, payload)
+                        setFieldErrors(fieldErrorMap(errors))
+                      }
+                    }}
+                    evidenceDocOptions={evidenceOptions}
+                    fieldErrors={fieldErrors}
                   />
-                  <span className="text-[11.5px] font-normal text-text-muted">
-                    Writes a new configs/&lt;slug&gt;.yaml the gateway enforces immediately — no code changes.
-                  </span>
-                </label>
+                </>
               ) : (
-                <div className="flex flex-col gap-2">
-                  {processes.map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      onClick={() => setExistingId(p.id)}
-                      className={cn(
-                        'flex items-center justify-between rounded-lg border-[1.5px] px-4 py-2.5 text-left text-[12.5px]',
-                        existingId === p.id ? 'border-accent bg-accent-soft' : 'border-border hover:bg-surface-hover',
-                      )}
-                    >
-                      <span className="font-semibold">{p.title}</span>
-                      <span className="font-mono text-text-muted">{p.id}</span>
-                    </button>
-                  ))}
-                  {processes.length === 0 && (
-                    <div className="text-xs text-text-muted">No processes yet — create one instead.</div>
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-2">
+                    {processes.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => {
+                          setExistingId(p.id)
+                          setTools(toToolsValue(p))
+                        }}
+                        className={cn(
+                          'flex items-center justify-between rounded-lg border-[1.5px] px-4 py-2.5 text-left text-[12.5px]',
+                          existingId === p.id ? 'border-accent bg-accent-soft' : 'border-border hover:bg-surface-hover',
+                        )}
+                      >
+                        <span className="font-semibold">{p.title}</span>
+                        <span className="font-mono text-text-muted">{p.id}</span>
+                      </button>
+                    ))}
+                    {processes.length === 0 && (
+                      <div className="text-xs text-text-muted">No processes yet — create one instead.</div>
+                    )}
+                  </div>
+                  {existingId && (
+                    <>
+                      <div className="text-[13px] font-bold text-text-secondary">
+                        Guardrails for{' '}
+                        <span className="text-text-primary">
+                          {processes.find((p) => p.id === existingId)?.title}
+                        </span>
+                      </div>
+                      <ToolsEditor value={tools} onChange={setTools} />
+                    </>
                   )}
                 </div>
               )}
@@ -226,32 +349,15 @@ export function ProcessWizardPage() {
                 variant="accent"
                 size="lg"
                 className="self-end"
-                onClick={handleStep1Next}
-                disabled={createProcess.isPending}
+                onClick={handleStep0Next}
+                disabled={pending}
               >
-                {createProcess.isPending ? 'Creating…' : 'Next'}
+                {pending ? 'Saving…' : 'Next'}
               </Button>
             </Card>
           )}
 
           {step === 1 && process && (
-            <Card className="flex flex-col gap-4 px-5 py-5">
-              <div className="text-[13px] font-bold text-text-secondary">
-                Guardrails for <span className="text-text-primary">{process.title}</span>
-              </div>
-              <ToolsEditor value={tools} onChange={setTools} />
-              <div className="flex justify-between">
-                <Button variant="default" onClick={() => setStep(0)}>
-                  Back
-                </Button>
-                <Button variant="accent" onClick={handleStep2Next} disabled={updateProcess.isPending}>
-                  {updateProcess.isPending ? 'Saving…' : 'Next'}
-                </Button>
-              </div>
-            </Card>
-          )}
-
-          {step === 2 && process && (
             <div className="flex flex-col gap-4">
               <KnowledgeBaseEditor
                 processId={process.id}
@@ -260,17 +366,17 @@ export function ProcessWizardPage() {
                 uploadedDocs={process.uploaded_docs}
               />
               <div className="flex justify-between">
-                <Button variant="default" onClick={() => setStep(1)}>
+                <Button variant="default" onClick={() => setStep(0)}>
                   Back
                 </Button>
-                <Button variant="accent" onClick={() => setStep(3)}>
+                <Button variant="accent" onClick={() => setStep(2)}>
                   Next
                 </Button>
               </div>
             </div>
           )}
 
-          {step === 3 && process && !created && (
+          {step === 2 && process && !created && (
             <Card className="flex flex-col gap-4 px-5 py-5">
               <div className="text-[13px] font-bold text-text-secondary">
                 Connect the agent that will call <span className="text-text-primary">{process.title}</span>
@@ -291,7 +397,7 @@ export function ProcessWizardPage() {
                 </select>
               </label>
               <div className="flex justify-between">
-                <Button variant="default" onClick={() => setStep(2)}>
+                <Button variant="default" onClick={() => setStep(1)}>
                   Back
                 </Button>
                 <Button variant="accent" onClick={handleConnect} disabled={!appName.trim() || createApp.isPending}>
