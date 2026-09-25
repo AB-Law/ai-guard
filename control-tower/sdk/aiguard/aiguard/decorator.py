@@ -6,10 +6,10 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 from .client import GuardClient, default_client
-from .exceptions import AiGuardBlocked, AiGuardEscalated
+from .exceptions import AiGuardBlocked, AiGuardEscalated, AiGuardRejected
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -21,6 +21,9 @@ def guard(
     rationale: str | Callable[..., str] | None = None,
     context: list[str] | Callable[..., list[str]] | None = None,
     client: GuardClient | None = None,
+    on_escalate: Literal["raise", "wait"] = "raise",
+    wait_poll_interval: float = 2.0,
+    wait_timeout: float = 120.0,
 ) -> Callable[[F], F]:
     """Evaluate a call against the tower before running the wrapped function.
 
@@ -29,8 +32,26 @@ def guard(
       args/kwargs the wrapped function was called with — use this to explain
       *why* the call should be allowed (e.g. cite the record that justifies
       it) the same way an LLM agent's rationale would.
-    - Raises AiGuardBlocked or AiGuardEscalated on anything but "allow"; the
-      wrapped function does not run in either case.
+    - Raises AiGuardBlocked on "block"; the wrapped function never runs.
+    - on_escalate="raise" (default): raises AiGuardEscalated on "escalate"
+      immediately — the wrapped function does not run, and it's on you to
+      resolve the call later (GuardClient.resolve_approval()) and re-invoke
+      the original operation yourself. Use this in a request/response path
+      you can't block (e.g. an HTTP handler) — surface the pending call_id
+      to your own UI and let it call resolve_approval() when a human acts.
+    - on_escalate="wait": on "escalate", blocks calling
+      GuardClient.wait_for_decision() (poll every wait_poll_interval
+      seconds, up to wait_timeout) instead of raising immediately. If a
+      human approves — via your own app calling resolve_approval(), or via
+      the tower's own dashboard — the wrapped function finally runs. If
+      rejected, raises AiGuardRejected. If it times out still pending,
+      raises AiGuardEscalated (same as the default, just later). Only use
+      this where blocking the calling thread/request is actually fine —
+      e.g. a background worker or a CLI script, not a web request handler.
+      Resolution itself (who approved/rejected, i.e. "actor") is driven by
+      whoever calls GuardClient.resolve_approval() elsewhere — your own
+      app's approval UI, or the tower's own dashboard — not by this
+      decorator, which only waits and reacts.
 
     >>> @guard(tool_name="create_purchase_order", process="procurement_review")
     ... def create_purchase_order(vendor_id: str, amount: float) -> dict:
@@ -55,6 +76,21 @@ def guard(
             if decision["decision"] == "block":
                 raise AiGuardBlocked(decision)
             if decision["decision"] == "escalate":
+                if on_escalate == "wait":
+                    try:
+                        resolved = guard_client.wait_for_decision(
+                            decision["call_id"],
+                            poll_interval=wait_poll_interval,
+                            timeout=wait_timeout,
+                        )
+                    except TimeoutError:
+                        raise AiGuardEscalated(decision) from None
+                    resolved_decision = resolved.get("decision") or {}
+                    if resolved_decision.get("decision") == "allow":
+                        return fn(*args, **kwargs)
+                    if resolved.get("status") == "rejected":
+                        raise AiGuardRejected(resolved_decision)
+                    raise AiGuardEscalated(resolved_decision)
                 raise AiGuardEscalated(decision)
             return fn(*args, **kwargs)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from aiguard import AiGuardBlocked, AiGuardEscalated, guard
+from aiguard import AiGuardBlocked, AiGuardEscalated, AiGuardRejected, guard
 
 
 def _client_returning(decision: str, **extra) -> MagicMock:
@@ -104,3 +104,76 @@ def test_only_kwargs_are_sent_as_tool_args() -> None:
     result = my_tool(1, 2)
     assert result == 3
     assert client.evaluate.call_args.kwargs["tool_args"] == {}
+
+
+def test_on_escalate_raise_is_the_default_and_never_polls() -> None:
+    client = _client_returning("escalate")
+
+    @guard(client=client)
+    def create_purchase_order(amount: float) -> dict:
+        return {}
+
+    with pytest.raises(AiGuardEscalated):
+        create_purchase_order(amount=50000)
+    client.wait_for_decision.assert_not_called()
+
+
+def test_on_escalate_wait_runs_the_wrapped_function_once_approved() -> None:
+    client = _client_returning("escalate")
+    client.wait_for_decision.return_value = {
+        "status": "completed",
+        "decision": {"decision": "allow", "call_id": "c1", "reason": "human approved"},
+    }
+    called_with = {}
+
+    @guard(client=client, on_escalate="wait", wait_poll_interval=0.01, wait_timeout=1.0)
+    def create_purchase_order(vendor_id: str, amount: float) -> dict:
+        called_with["vendor_id"] = vendor_id
+        return {"status": "created"}
+
+    result = create_purchase_order(vendor_id="V-1001", amount=50000)
+    assert result == {"status": "created"}
+    assert called_with == {"vendor_id": "V-1001"}
+    client.wait_for_decision.assert_called_once()
+    assert client.wait_for_decision.call_args.args[0] == "c1"
+    assert client.wait_for_decision.call_args.kwargs["poll_interval"] == 0.01
+    assert client.wait_for_decision.call_args.kwargs["timeout"] == 1.0
+
+
+def test_on_escalate_wait_raises_rejected_and_never_runs_the_function() -> None:
+    client = _client_returning("escalate")
+    client.wait_for_decision.return_value = {
+        "status": "rejected",
+        "decision": {"decision": "block", "call_id": "c1", "reason": "human rejected"},
+    }
+    called = False
+
+    @guard(client=client, on_escalate="wait")
+    def create_purchase_order(amount: float) -> dict:
+        nonlocal called
+        called = True
+        return {}
+
+    with pytest.raises(AiGuardRejected):
+        create_purchase_order(amount=50000)
+    assert called is False
+
+
+def test_on_escalate_wait_raises_escalated_not_timeouterror_on_timeout() -> None:
+    """A caller catching AiGuardEscalated (the "raise" default's exception)
+    must also catch the "wait" mode's timeout case — no separate exception
+    type for callers to remember."""
+    client = _client_returning("escalate")
+    client.wait_for_decision.side_effect = TimeoutError("still pending")
+    called = False
+
+    @guard(client=client, on_escalate="wait")
+    def create_purchase_order(amount: float) -> dict:
+        nonlocal called
+        called = True
+        return {}
+
+    with pytest.raises(AiGuardEscalated) as exc_info:
+        create_purchase_order(amount=50000)
+    assert called is False
+    assert exc_info.value.call_id == "c1"
