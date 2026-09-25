@@ -100,4 +100,139 @@ describe('CaseDetailPage', () => {
     expect(screen.getByText('sha256:deadbeef')).toBeInTheDocument()
     expect(screen.getByText('apply_learned_rule')).toBeInTheDocument()
   })
+
+  it('renders evidence card from retrieval, policy, and tool audit entries', async () => {
+    const user = userEvent.setup()
+    const now = new Date().toISOString()
+    server.use(
+      http.get('*/api/cases/:caseId', () =>
+        HttpResponse.json({
+          case_id: 'CASE-EVIDENCE',
+          process: 'procurement_review',
+          status: 'blocked',
+          call_id: 'call-evidence-1',
+          gateway_decision: {
+            call_id: 'call-evidence-1',
+            decision: 'block',
+            reason: 'Disallowed tool',
+            policy_refs: ['policy:allow_list'],
+            risk_score: 95,
+            confidence_score: 0.9,
+            evidence_score: 0.3,
+          },
+          tool_result: null,
+          request: { vendor_id: 'V-9' },
+          source_app: 'claims-agent',
+          created_at: now,
+        }),
+      ),
+      http.get('*/api/cases/:caseId/audit', () =>
+        HttpResponse.json({
+          case_id: 'CASE-EVIDENCE',
+          chain_valid: true,
+          entries: [
+            {
+              entry_id: 'e-ret',
+              process: 'procurement_review',
+              step_id: 'retrieve',
+              event_type: 'retrieval',
+              payload: {
+                case_id: 'CASE-EVIDENCE',
+                chunks: [
+                  {
+                    id: 'chunk-1',
+                    source: 'policies/procurement.md',
+                    excerpt: 'Payments require dual approval.',
+                  },
+                ],
+              },
+              scores: null,
+              timestamp: now,
+              prev_hash: '0'.repeat(64),
+              entry_hash: 'a'.repeat(64),
+            },
+            {
+              entry_id: 'e-pol',
+              process: 'procurement_review',
+              step_id: 'gateway',
+              event_type: 'policy_check',
+              payload: {
+                case_id: 'CASE-EVIDENCE',
+                unsupported_claims: ['Vendor waived approval'],
+                entailment: { violated_clauses: ['clause:dual-control'] },
+              },
+              scores: null,
+              timestamp: now,
+              prev_hash: 'a'.repeat(64),
+              entry_hash: 'b'.repeat(64),
+            },
+            {
+              entry_id: 'e-tool',
+              process: 'procurement_review',
+              step_id: 'tool',
+              event_type: 'tool_call',
+              payload: {
+                case_id: 'CASE-EVIDENCE',
+                tool_name: 'send_payment',
+                tool_args: { amount: 9000 },
+              },
+              scores: null,
+              timestamp: now,
+              prev_hash: 'b'.repeat(64),
+              entry_hash: 'c'.repeat(64),
+            },
+          ],
+        }),
+      ),
+    )
+    renderCase('CASE-EVIDENCE')
+    await waitFor(() => expect(screen.getByText('CASE-EVIDENCE')).toBeInTheDocument())
+    expect(screen.getByText('Evidence')).toBeInTheDocument()
+    expect(screen.getByText('policies/procurement.md (chunk-1)')).toBeInTheDocument()
+    expect(screen.getByText('Vendor waived approval')).toBeInTheDocument()
+    expect(screen.getByText(/policy:allow_list, clause:dual-control/)).toBeInTheDocument()
+    expect(screen.getByText(/Proposed: send_payment\(\{"amount":9000\}\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Actual: Blocked — not executed/)).toBeInTheDocument()
+
+    await user.click(screen.getByText('Confidence'))
+    await user.click(screen.getByText('Risk score'))
+    expect(screen.getByText(/Risk score — 95 \/ 100/)).toBeInTheDocument()
+  })
+
+  it('shows tool result as actual action when executed', async () => {
+    const now = new Date().toISOString()
+    server.use(
+      http.get('*/api/cases/:caseId', () =>
+        HttpResponse.json({
+          ...cases[0],
+          case_id: 'CASE-TOOL-RESULT',
+          tool_result: { ok: true, po_id: 'PO-1' },
+        }),
+      ),
+      http.get('*/api/cases/:caseId/audit', () =>
+        HttpResponse.json({
+          case_id: 'CASE-TOOL-RESULT',
+          chain_valid: true,
+          entries: [
+            {
+              entry_id: 'e-tool',
+              process: 'procurement_review',
+              step_id: 'tool',
+              event_type: 'tool_call',
+              payload: { case_id: 'CASE-TOOL-RESULT', tool_name: 'create_purchase_order' },
+              scores: null,
+              timestamp: now,
+              prev_hash: '0'.repeat(64),
+              entry_hash: 'a'.repeat(64),
+            },
+          ],
+        }),
+      ),
+    )
+    renderCase('CASE-TOOL-RESULT')
+    await waitFor(() => expect(screen.getByText('CASE-TOOL-RESULT')).toBeInTheDocument())
+    expect(screen.getByText(/Actual: \{"ok":true,"po_id":"PO-1"\}/)).toBeInTheDocument()
+    expect(screen.getByText('No documents retrieved for this case.')).toBeInTheDocument()
+    expect(screen.getByText('No passage recorded.')).toBeInTheDocument()
+  })
 })
