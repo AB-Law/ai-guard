@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Route, Routes } from 'react-router-dom'
+import { http, HttpResponse } from 'msw'
 import { ProcessWizardPage } from './ProcessWizardPage'
 import { AppShell } from '../components/layout/AppShell'
 import { renderApp } from '../test/render'
+import { server } from '../test/mocks/server'
 
 function renderWizard() {
   return renderApp(
@@ -67,5 +69,69 @@ describe('ProcessWizardPage', () => {
     renderWizard()
     await user.click(screen.getByRole('button', { name: 'Next' }))
     expect(await screen.findByText(/Give the new process a name/i)).toBeInTheDocument()
+  })
+
+  it('steps back from thresholds and from policy', async () => {
+    const user = userEvent.setup()
+    renderWizard()
+
+    await user.type(screen.getByPlaceholderText('Claims Review'), 'Back Nav Test')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() => expect(screen.getByText(/Guardrails for/i)).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    expect(screen.getByPlaceholderText('Claims Review')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() => expect(screen.getByText(/Guardrails for/i)).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() => expect(screen.getByText(/Knowledge base —/i)).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    await waitFor(() => expect(screen.getByText(/Guardrails for/i)).toBeInTheDocument())
+  })
+
+  it('switches environment and copies the generated key', async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    renderWizard()
+
+    await user.type(screen.getByPlaceholderText('Claims Review'), 'Env Test')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() => expect(screen.getByText(/Guardrails for/i)).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() => expect(screen.getByText(/Knowledge base —/i)).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByText(/Connect the agent/i)).toBeInTheDocument())
+    await user.selectOptions(screen.getByDisplayValue('Production'), 'staging')
+    await user.type(screen.getByPlaceholderText('Claims Review Agent'), 'Env Bot')
+    await user.click(screen.getByRole('button', { name: /Create & generate key/i }))
+
+    await waitFor(() => expect(screen.getByText(/is connected to Env Test/i)).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Copy/i }))
+    expect(writeText).toHaveBeenCalledWith('aeg_live_secret_key_only_once')
+  })
+
+  it('surfaces an error when connecting the agent fails', async () => {
+    const user = userEvent.setup()
+    renderWizard()
+
+    await user.click(screen.getByRole('button', { name: 'Use an existing process' }))
+    await waitFor(() => expect(screen.getByText('Procurement Review')).toBeInTheDocument())
+    await user.click(screen.getByText('Procurement Review'))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() => expect(screen.getByText(/Guardrails for/i)).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() => expect(screen.getByText(/Knowledge base —/i)).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() => expect(screen.getByText(/Connect the agent/i)).toBeInTheDocument())
+
+    server.use(http.post('*/api/applications', () => HttpResponse.text('boom', { status: 500 })))
+    await user.type(screen.getByPlaceholderText('Claims Review Agent'), 'Failing Bot')
+    await user.click(screen.getByRole('button', { name: /Create & generate key/i }))
+
+    expect(await screen.findByText(/failed: 500/i)).toBeInTheDocument()
   })
 })
