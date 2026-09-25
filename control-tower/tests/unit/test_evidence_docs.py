@@ -2,8 +2,19 @@
 
 from __future__ import annotations
 
-from configs.loader import load_process
+from configs.loader import ApprovalThreshold, ProcessConfig, load_process
 from guardrails.evidence_docs import missing_required_evidence_docs
+
+
+def _config_with_docs(*docs: str) -> ProcessConfig:
+    return ProcessConfig(
+        process="eval_unknown",
+        allowed_tools=[],
+        disallowed_tools=[],
+        required_evidence_docs=list(docs),
+        approval_threshold=ApprovalThreshold(risk_score_gte=60),
+        knowledge_base_paths=[],
+    )
 
 
 def test_empty_refs_misses_all_required() -> None:
@@ -39,3 +50,20 @@ def test_kyc_prefix_match() -> None:
     assert (
         missing_required_evidence_docs(config, ["chunk:kyc:identity_verification"]) == []
     )
+
+
+def test_unknown_label_substring_hit() -> None:
+    config = _config_with_docs("custom_handbook")
+    assert (
+        missing_required_evidence_docs(
+            config, ["chunk:doc:custom_handbook:section_0"]
+        )
+        == []
+    )
+
+
+def test_unknown_label_substring_miss() -> None:
+    config = _config_with_docs("custom_handbook")
+    assert missing_required_evidence_docs(config, ["chunk:policy:auto_approve"]) == [
+        "custom_handbook"
+    ]
