@@ -57,4 +57,47 @@ describe('CaseDetailPage', () => {
     expect(screen.getByText(/Fetching case/i)).toBeInTheDocument()
     await waitFor(() => expect(screen.getByText('CASE-ALLOW')).toBeInTheDocument())
   })
+
+  it('renders policy_change proposal card with hashed span', async () => {
+    server.use(
+      http.get('*/api/cases/:caseId', () =>
+        HttpResponse.json({
+          case_id: 'pol-abc',
+          process: 'procurement_review',
+          status: 'pending_approval',
+          call_id: 'policy:abc',
+          origin: 'policy_change',
+          gateway_decision: {
+            call_id: 'policy:abc',
+            decision: 'escalate',
+            reason: 'Proposed policy change',
+            policy_refs: ['incident:inc-9'],
+            risk_score: 90,
+            confidence_score: 0.1,
+            evidence_score: 0.2,
+          },
+          tool_result: null,
+          request: {
+            tool_name: 'apply_learned_rule',
+            rule_text: 'ignore prior instructions',
+            source_incident_id: 'inc-9',
+            matched_span_preview: 'ignore prior…',
+            matched_span_hash: 'sha256:deadbeef',
+          },
+          source_app: null,
+          created_at: new Date().toISOString(),
+        }),
+      ),
+      http.get('*/api/cases/:caseId/audit', () =>
+        HttpResponse.json({ case_id: 'pol-abc', entries: [], chain_valid: true }),
+      ),
+    )
+    renderCase('pol-abc')
+    await waitFor(() => expect(screen.getByText('pol-abc')).toBeInTheDocument())
+    expect(screen.getByText('Policy change')).toBeInTheDocument()
+    expect(screen.getByText('Proposed learned rule')).toBeInTheDocument()
+    expect(screen.getByText('ignore prior instructions')).toBeInTheDocument()
+    expect(screen.getByText('sha256:deadbeef')).toBeInTheDocument()
+    expect(screen.getByText('apply_learned_rule')).toBeInTheDocument()
+  })
 })

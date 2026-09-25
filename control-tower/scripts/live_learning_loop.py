@@ -109,11 +109,10 @@ def main() -> int:
             # Prefer the newest proposal for this live run.
             candidates = [a for a in approvals if a.get("origin") == "policy_change"]
             if candidates:
-                policy = sorted(
+                policy = max(
                     candidates,
                     key=lambda a: str(a.get("requested_at") or ""),
-                    reverse=True,
-                )[0]
+                )
                 break
         if not policy:
             print("no policy_change appeared")
