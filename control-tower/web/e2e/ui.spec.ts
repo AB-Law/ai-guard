@@ -129,6 +129,39 @@ async function mockApi(page: Page) {
       return json({ id: path.split('/').pop() })
     }
     if (path.endsWith('/configs') && method === 'GET') return json(configs)
+    if (path.endsWith('/processes/schema') && method === 'GET') {
+      return json({
+        title: 'ProcessConfig',
+        type: 'object',
+        properties: {
+          process: { type: 'string' },
+          required_evidence_docs: {
+            type: 'array',
+            items: {
+              type: 'string',
+              enum: ['finance_policy', 'procurement_policy', 'kyc_policy'],
+            },
+          },
+          approval_threshold: {
+            type: 'object',
+            properties: { risk_score_gte: { type: 'integer' } },
+          },
+        },
+        'x-known-tools': ['create_purchase_order'],
+      })
+    }
+    if (path.endsWith('/processes') && method === 'POST') {
+      return json({
+        id: 'e2e_new_process',
+        title: 'E2E New Process',
+        config_path: 'configs/e2e_new_process.yaml',
+        allowed_tools: [],
+        disallowed_tools: [],
+        approval_threshold: { risk_score_gte: 60 },
+        seed_docs: [],
+        uploaded_docs: [],
+      })
+    }
     if (path.endsWith('/applications') && method === 'GET') return json({ applications: [] })
     if (path.endsWith('/applications') && method === 'POST') {
       return json({
@@ -210,8 +243,7 @@ test.describe('Control Tower UI (mocked API)', () => {
 
     await page.getByRole('button', { name: 'Use an existing process' }).click()
     await page.getByText('Procurement Review').click()
-    await page.getByRole('button', { name: 'Next' }).click()
-
+    // Guardrails now edit in-place on the Process step (not a separate step).
     await expect(page.getByText(/Guardrails for/i)).toBeVisible()
     await page.getByRole('button', { name: 'Next' }).click()
 
