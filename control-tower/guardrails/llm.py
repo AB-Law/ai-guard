@@ -46,3 +46,32 @@ def reset_chat_openai_cache() -> None:
     with _lock:
         _llm = None
         _llm_key = None
+
+
+def invoke_structured(structured: Any, prompt: Any) -> Any:
+    """Invoke a structured LLM chain and record token usage when exposed.
+
+    Expects runnables built with ``structured_with_raw`` (include_raw=True)
+    when the LangChain version supports it. Missing usage is recorded as
+    unavailable — never fabricated as zero.
+    """
+    from telemetry.metrics import record_model_usage_from_response
+
+    result = structured.invoke(prompt)
+    if isinstance(result, dict) and "parsed" in result:
+        record_model_usage_from_response(result)
+        parsed = result.get("parsed")
+        err = result.get("parsing_error")
+        if parsed is None and err is not None:
+            raise err
+        return parsed
+    record_model_usage_from_response(result)
+    return result
+
+
+def structured_with_raw(llm: Any, schema: Any, *, method: str = "function_calling") -> Any:
+    """Build a structured-output runnable that retains the raw AIMessage."""
+    try:
+        return llm.with_structured_output(schema, method=method, include_raw=True)
+    except TypeError:
+        return llm.with_structured_output(schema, method=method)

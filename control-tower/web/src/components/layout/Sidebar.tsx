@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   LogOut,
   Code2,
+  Activity,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { Badge } from '../ui/Badge'
@@ -20,6 +21,7 @@ const navItems = [
   { to: '/approvals', label: 'Approvals', icon: CircleCheck, badgeKey: 'approvals' as const },
   { to: '/logs', label: 'Logs', icon: ScrollText },
   { to: '/audit', label: 'Audit & Integrity', icon: Link2 },
+  { to: '/metrics', label: 'Ops metrics', icon: Activity },
   { to: '/config', label: 'Config', icon: SlidersHorizontal },
   { to: '/developers', label: 'Developers', icon: Code2 },
 ]

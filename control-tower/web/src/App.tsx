@@ -14,6 +14,7 @@ import { LogsPage } from './pages/LogsPage'
 import { AuditIntegrityPage } from './pages/AuditIntegrityPage'
 import { ConfigPage } from './pages/ConfigPage'
 import { DevelopersPage } from './pages/DevelopersPage'
+import { OpsMetricsPage } from './pages/OpsMetricsPage'
 
 const queryClient = new QueryClient()
 
@@ -30,6 +31,7 @@ export function AppRoutes() {
       <Route path="/cases/:caseId" element={<ProtectedRoute><CaseDetailPage /></ProtectedRoute>} />
       <Route path="/logs" element={<ProtectedRoute><LogsPage /></ProtectedRoute>} />
       <Route path="/audit" element={<ProtectedRoute><AuditIntegrityPage /></ProtectedRoute>} />
+      <Route path="/metrics" element={<ProtectedRoute><OpsMetricsPage /></ProtectedRoute>} />
       <Route path="/config" element={<ProtectedRoute><ConfigPage /></ProtectedRoute>} />
     </Routes>
   )

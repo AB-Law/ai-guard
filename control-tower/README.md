@@ -185,6 +185,38 @@ Instrumented boundaries: incoming HTTP, case run/resume, guard evaluate, approva
 
 The `aiguard` SDK injects W3C trace-context headers when `opentelemetry-api` is installed (`pip install "aiguard[otel]"`).
 
+### Operational metrics
+
+In-process counters/histograms are always recorded (cheap, never block decisions). Export options:
+
+| Surface | Auth | Purpose |
+|---------|------|---------|
+| `GET /metrics` | none | Prometheus text exposition (scrape) |
+| `GET /ops/metrics` | dashboard JWT | JSON snapshot for the Control Tower **Ops metrics** page |
+| OTLP metrics | when `AEGIS_OTEL_ENABLED=1` and `OTEL_EXPORTER_OTLP_ENDPOINT` is set | Push alongside traces (same collector endpoint) |
+
+**Series (bounded labels only):** `route`, `process`, `source_app`, `outcome` / `decision`. Never `case_id`, `call_id`, user IDs, or arbitrary tool names.
+
+| Metric | Meaning |
+|--------|---------|
+| `aegis_requests_total` | HTTP requests by route / process / source_app / outcome (`ok`, `client_error`, `server_error`) |
+| `aegis_request_duration_ms_*` | Request latency sum + count (avg = sum/count) |
+| `aegis_guard_decisions_total` | Guard `allow` / `block` / `escalate` |
+| `aegis_guard_eval_duration_ms_*` | Guard evaluation latency |
+| `aegis_guard_errors_total` | Guard path errors |
+| `aegis_approvals_total` | Approval resolutions (`approved`, `denied`, `error`) |
+| `aegis_model_prompt_tokens_total` | Observed prompt tokens — **emitted only when providers report usage** |
+| `aegis_model_completion_tokens_total` | Observed completion tokens — same |
+| `aegis_model_estimated_cost_usd_total` | Estimated USD cost — only when usage **and** `AEGIS_MODEL_PRICING_JSON` exist; always an estimate |
+
+Missing usage or pricing → JSON fields are `null` / Prometheus series omitted (not zero). Metric export or scrape failures never block agent execution or approvals.
+
+**Pricing config** (USD per 1M tokens):
+
+```bash
+set AEGIS_MODEL_PRICING_JSON={"gpt-4o":{"input_per_1m":2.5,"output_per_1m":10.0},"default":{"input_per_1m":2.5,"output_per_1m":10.0}}
+```
+
 ## Run scenario fixtures (no API/dashboard needed)
 
 ```bash

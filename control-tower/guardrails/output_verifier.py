@@ -532,10 +532,10 @@ def _llm_judge(
     if not context_chunks and not facts_text:
         return VerificationResult(evidence_score=0.0, unsupported_claims=_split_claims(rationale))
 
-    from guardrails.llm import get_chat_openai
+    from guardrails.llm import get_chat_openai, invoke_structured, structured_with_raw
 
     llm = get_chat_openai()
-    structured = llm.with_structured_output(VerificationResult, method="function_calling")
+    structured = structured_with_raw(llm, VerificationResult, method="function_calling")
 
     context_block = "\n\n".join(f"[{i}] {c}" for i, c in enumerate(context_chunks)) or "(none)"
     prompt = (
@@ -600,7 +600,7 @@ def _llm_judge(
         f"Retrieved context:\n{context_block}\n\n"
         "Return evidence_score in [0, 1] and unsupported_claims."
     )
-    raw = structured.invoke(prompt)
+    raw = invoke_structured(structured, prompt)
     if raw is None:
         raise ValueError("evidence judge returned empty structured output")
     return VerificationResult.model_validate(raw)

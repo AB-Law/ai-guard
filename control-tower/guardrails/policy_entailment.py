@@ -62,18 +62,18 @@ def _llm_entail(
     """Structured LLM judge: does the proposed tool call comply with policy?"""
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    from guardrails.llm import get_chat_openai
+    from guardrails.llm import get_chat_openai, invoke_structured, structured_with_raw
 
     llm = get_chat_openai()
-    structured = llm.bind(temperature=0).with_structured_output(
-        PolicyEntailmentResult, method="function_calling"
+    structured = structured_with_raw(
+        llm.bind(temperature=0), PolicyEntailmentResult, method="function_calling"
     )
 
     messages = [
         SystemMessage(content=load_policy_entailment_rubric()),
         HumanMessage(content=_build_human_prompt(request, policy_excerpts)),
     ]
-    raw = structured.invoke(messages)
+    raw = invoke_structured(structured, messages)
     result = PolicyEntailmentResult.model_validate(raw)
     if result.compliant:
         return PolicyEntailmentResult(compliant=True, violated_clauses=[], severity="none")

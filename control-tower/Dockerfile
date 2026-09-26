@@ -18,6 +18,7 @@ COPY guardrails/ guardrails/
 COPY investigation_assistant/ investigation_assistant/
 COPY knowledge/ knowledge/
 COPY scripts/ scripts/
+COPY telemetry/ telemetry/
 COPY data/ data/
 
 RUN pip install --no-cache-dir -e ".[scale]"

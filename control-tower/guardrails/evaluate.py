@@ -152,6 +152,7 @@ def evaluate_tool_call(
     stage_timings_ms: dict[str, float] | None = None,
     schedule_learning: Callable[[Callable[[], None]], None] | None = None,
     case_store: Any | None = None,
+    source_app: str | None = None,
 ) -> GatewayDecision:
     """Run injection scan, verification, policy entailment, scoring, gateway, audit.
 
@@ -175,24 +176,46 @@ def evaluate_tool_call(
             "case_id": request.case_id,
         },
     ) as span:
-        decision = _evaluate_tool_call_impl(
-            request,
-            config,
-            retrieved_texts=retrieved_texts,
-            context_chunks=context_chunks,
-            injection_flags=injection_flags,
-            retrieved_chunk_ids=retrieved_chunk_ids,
-            audit=audit,
-            stage_timings_ms=stage_timings_ms,
-            schedule_learning=schedule_learning,
-            case_store=case_store,
-        )
+        t_eval = time.perf_counter()
+        try:
+            decision = _evaluate_tool_call_impl(
+                request,
+                config,
+                retrieved_texts=retrieved_texts,
+                context_chunks=context_chunks,
+                injection_flags=injection_flags,
+                retrieved_chunk_ids=retrieved_chunk_ids,
+                audit=audit,
+                stage_timings_ms=stage_timings_ms,
+                schedule_learning=schedule_learning,
+                case_store=case_store,
+            )
+        except Exception:
+            try:
+                from telemetry.metrics import record_guard_error
+
+                record_guard_error(process=request.process)
+            except Exception:  # noqa: BLE001, S110
+                pass
+            raise
+        duration_ms = (time.perf_counter() - t_eval) * 1000.0
         try:
             set_aegis_attributes(span, decision=decision.decision)
             tid = current_trace_id()
             if tid and decision.trace_id is None:
                 decision = decision.model_copy(update={"trace_id": tid})
         except Exception:  # noqa: BLE001, S110 — telemetry must not alter decisions
+            pass
+        try:
+            from telemetry.metrics import record_guard_decision
+
+            record_guard_decision(
+                process=request.process,
+                source_app=source_app,
+                decision=decision.decision,
+                duration_ms=duration_ms,
+            )
+        except Exception:  # noqa: BLE001, S110
             pass
         return decision
 

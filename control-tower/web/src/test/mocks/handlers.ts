@@ -8,6 +8,7 @@ import {
   configs,
   createdApplication,
   traffic,
+  opsMetricsPopulated,
 } from './data'
 
 const api = (path: string) => `*/api${path}`
@@ -37,6 +38,8 @@ export const handlers = [
   }),
 
   http.get(api('/health'), () => HttpResponse.json({ status: 'ok' })),
+
+  http.get(api('/ops/metrics'), () => HttpResponse.json(opsMetricsPopulated)),
 
   http.get(api('/cases'), () => HttpResponse.json({ cases })),
 

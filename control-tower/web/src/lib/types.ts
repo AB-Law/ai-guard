@@ -180,3 +180,31 @@ export interface Approval {
   matched_span_hash?: string | null
   source_incident_id?: string | null
 }
+
+export interface OpsMetricsSnapshot {
+  requests: {
+    total: number
+    by_route: Array<{ route: string; count: number; avg_duration_ms: number | null }>
+    by_outcome: Record<string, number>
+  }
+  guards: {
+    decisions: { allow: number; block: number; escalate: number }
+    avg_latency_ms: number | null
+    errors: number
+    evaluations: number
+  }
+  approvals: { approved: number; denied: number; error: number }
+  model: {
+    usage_available: boolean
+    pricing_configured: boolean
+    prompt_tokens: number | null
+    completion_tokens: number | null
+    estimated_cost_usd: number | null
+    estimated_cost_is_estimate: boolean
+    calls_with_usage: number
+    calls_without_usage: number
+    unavailable_reason: string | null
+  }
+  generated_at_ms: number
+}
+

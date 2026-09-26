@@ -119,10 +119,10 @@ def _truncate_for_llm(text: str) -> str:
 
 def _llm_classify(texts: list[str]) -> InjectionClassifierResult:
     """Semantic injection classifier — used only when OPENAI_API_KEY is set."""
-    from guardrails.llm import get_chat_openai
+    from guardrails.llm import get_chat_openai, invoke_structured, structured_with_raw
 
     llm = get_chat_openai()
-    structured = llm.with_structured_output(InjectionClassifierResult, method="function_calling")
+    structured = structured_with_raw(llm, InjectionClassifierResult, method="function_calling")
 
     context_block = "\n\n".join(
         f"[{i}] {_truncate_for_llm(t)}" for i, t in enumerate(texts)
@@ -146,7 +146,7 @@ def _llm_classify(texts: list[str]) -> InjectionClassifierResult:
         "- rationale: one short sentence explaining the decision\n\n"
         f"Chunks:\n{context_block}\n"
     )
-    raw = structured.invoke(prompt)
+    raw = invoke_structured(structured, prompt)
     return InjectionClassifierResult.model_validate(raw)
 
 

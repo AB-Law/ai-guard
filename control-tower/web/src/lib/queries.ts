@@ -181,6 +181,15 @@ export function useSeedDemo() {
       client.invalidateQueries({ queryKey: ['cases'] })
       client.invalidateQueries({ queryKey: ['traffic-recent'] })
       client.invalidateQueries({ queryKey: ['approvals'] })
+      client.invalidateQueries({ queryKey: ['ops-metrics'] })
     },
+  })
+}
+
+export function useOpsMetrics() {
+  return useQuery({
+    queryKey: ['ops-metrics'],
+    queryFn: api.opsMetrics,
+    refetchInterval: 5000,
   })
 }

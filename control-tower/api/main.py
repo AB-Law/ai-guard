@@ -43,6 +43,15 @@ from investigation_assistant.qa_agent import (
 )
 from knowledge.rag import KnowledgeBase, build_kb_for_process, source_for_path, uploads_dir
 from scripts.demo_pack import REHEARSAL_IDS, load_rehearsal_bodies
+from telemetry.labels import outcome_from_status_code
+from telemetry.metrics import (
+    record_approval,
+    record_request,
+    render_prometheus,
+)
+from telemetry.metrics import (
+    snapshot as metrics_snapshot,
+)
 from telemetry.setup import configure_telemetry, shutdown_telemetry
 from telemetry.tracing import current_trace_id, start_span
 
@@ -391,6 +400,36 @@ def create_app(
     app.state.side_effects = ToolSideEffects()
     app.state.checkpointer = checkpointer
     app.state._close_checkpointer = close_checkpointer
+
+    @app.middleware("http")
+    async def _ops_metrics_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
+        """Record request volume/latency; never blocks on metrics failure."""
+        t0 = time.perf_counter()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        except Exception:
+            status_code = 500
+            raise
+        finally:
+            try:
+                route = request.scope.get("route")
+                route_path = getattr(route, "path", None) or request.url.path
+                # Skip the scrape/snapshot endpoints themselves to avoid feedback.
+                if route_path in {"/metrics", "/ops/metrics"}:
+                    pass
+                else:
+                    record_request(
+                        route=route_path,
+                        process=getattr(request.state, "aegis_process", None),
+                        source_app=getattr(request.state, "aegis_source_app", None),
+                        outcome=outcome_from_status_code(status_code),
+                        duration_ms=(time.perf_counter() - t0) * 1000.0,
+                    )
+            except Exception:  # noqa: BLE001, S110 — metrics never block
+                pass
 
     def _kb_for(process: str) -> KnowledgeBase:
         if process not in app.state.kbs:
@@ -820,6 +859,7 @@ def create_app(
     def guard_evaluate(
         body: GuardEvaluateBody,
         background_tasks: BackgroundTasks,
+        http_request: Request,
         caller: dict[str, Any] = api_key_required,
     ) -> dict[str, Any]:
         """Evaluate one proposed tool call against process policy and audit it —
@@ -844,6 +884,8 @@ def create_app(
         """
         process = caller.get("process") or body.process
         source_app = caller.get("source_app") or body.source_app
+        http_request.state.aegis_process = process
+        http_request.state.aegis_source_app = source_app
         try:
             config = load_process(process)
         except (ValueError, FileNotFoundError) as exc:
@@ -875,6 +917,7 @@ def create_app(
                 stage_timings_ms=stage_timings,
                 schedule_learning=background_tasks.add_task,
                 case_store=store,
+                source_app=source_app,
             )
         else:
             process_kb = _kb_for(process)
@@ -919,6 +962,7 @@ def create_app(
                 stage_timings_ms=stage_timings,
                 schedule_learning=background_tasks.add_task,
                 case_store=store,
+                source_app=source_app,
             )
         # Surface SDK / external evaluations on /cases and /traffic/recent so
         # simulated apps show up alongside graph-driven /cases traffic.
@@ -1047,6 +1091,14 @@ def create_app(
             store.cases[case["case_id"]] = case
             if case.get("call_id"):
                 store.call_to_case[case["call_id"]] = case["case_id"]
+            try:
+                record_approval(
+                    process=case.get("process"),
+                    source_app=case.get("source_app"),
+                    outcome="approved" if action == "approve" else "denied",
+                )
+            except Exception:  # noqa: BLE001, S110
+                pass
             return _guard_case_snapshot(case)
 
     def _resolve_policy_change_case(
@@ -1277,13 +1329,32 @@ def create_app(
                 "source_app": case.get("source_app"),
             },
         ):
-            result = resume_case(
-                app.state.graph,
-                thread_id=case_id,
-                action=body.action,
-                actor=body.actor,
-            )
-            return _snapshot_case(case_id, result)
+            try:
+                result = resume_case(
+                    app.state.graph,
+                    thread_id=case_id,
+                    action=body.action,
+                    actor=body.actor,
+                )
+                try:
+                    record_approval(
+                        process=case.get("process"),
+                        source_app=case.get("source_app"),
+                        outcome="approved" if body.action == "approve" else "denied",
+                    )
+                except Exception:  # noqa: BLE001, S110
+                    pass
+                return _snapshot_case(case_id, result)
+            except Exception:
+                try:
+                    record_approval(
+                        process=case.get("process"),
+                        source_app=case.get("source_app"),
+                        outcome="error",
+                    )
+                except Exception:  # noqa: BLE001, S110
+                    pass
+                raise
 
     @app.post("/demo/reset", dependencies=[Depends(require_dashboard_token)])
     def demo_reset() -> dict[str, Any]:
@@ -1759,6 +1830,46 @@ def create_app(
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/metrics")
+    def prometheus_metrics() -> Any:
+        """Prometheus text exposition — scrape-friendly, no auth (ops network)."""
+        from fastapi.responses import PlainTextResponse
+
+        try:
+            body = render_prometheus()
+        except Exception:  # noqa: BLE001 — scrape must not 500 the process
+            body = "# aegis metrics temporarily unavailable\n"
+        return PlainTextResponse(body, media_type="text/plain; version=0.0.4; charset=utf-8")
+
+    @app.get("/ops/metrics", dependencies=[Depends(require_dashboard_token)])
+    def ops_metrics_snapshot() -> dict[str, Any]:
+        """JSON snapshot for the Control Tower ops dashboard."""
+        try:
+            return metrics_snapshot()
+        except Exception:  # noqa: BLE001
+            return {
+                "requests": {"total": 0, "by_route": [], "by_outcome": {}},
+                "guards": {
+                    "decisions": {"allow": 0, "block": 0, "escalate": 0},
+                    "avg_latency_ms": None,
+                    "errors": 0,
+                    "evaluations": 0,
+                },
+                "approvals": {"approved": 0, "denied": 0, "error": 0},
+                "model": {
+                    "usage_available": False,
+                    "pricing_configured": False,
+                    "prompt_tokens": None,
+                    "completion_tokens": None,
+                    "estimated_cost_usd": None,
+                    "estimated_cost_is_estimate": True,
+                    "calls_with_usage": 0,
+                    "calls_without_usage": 0,
+                    "unavailable_reason": "metrics_snapshot_failed",
+                },
+                "generated_at_ms": int(time.time() * 1000),
+            }
 
     @app.post("/auth/login")
     def login(body: LoginBody) -> dict[str, str]:
