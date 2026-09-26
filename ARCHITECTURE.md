@@ -231,7 +231,7 @@ The brief requires at least three detected risk types. Each is demoed as a live,
 - **Least privilege** — the agent has no ambient tool access; every call is allow-listed per process.
 - **Untrusted-content tagging** — retrieved documents are never treated as instructions, only as evidence.
 - **Tamper-evident audit trail** — hash-chained log entries make silent edits detectable.
-- **PII minimization** — redact sensitive fields (e.g., banking details) in logs and dashboard views, log a reference/hash instead of the raw value.
+- **PII minimization** — configurable detectors for email, phone, government-ID-shaped values (US SSN), API keys/bearer tokens, and banking identifiers. Detection emits type/location/severity/confidence; redaction runs before audit hash/persist and before any telemetry export (previews + stable hashes only). Default action is **redact** (does not change allow/block); processes may opt into `block` or `escalate`. See [control-tower/docs/sensitive-data.md](control-tower/docs/sensitive-data.md).
 
 ---
 

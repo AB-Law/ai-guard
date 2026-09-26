@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 from audit.log_store import AppendInput
 from audit.redact import redact_injection_span
+from audit.sensitive_data.detectors import scrub_secretish
 from contracts.schemas import GatewayDecision, IncidentEvent, InjectionFlag
 from guardrails.rule_store import (
     LearnedRuleStore,
@@ -25,9 +26,6 @@ from guardrails.rule_store import (
 logger = logging.getLogger(__name__)
 
 _META_STRIP_RE = re.compile(r"[.*+?^${}|()\[\]\\]")
-_SECRETISH_RE = re.compile(
-    r"(?i)(?:sk-[a-z0-9_-]{8,}|bearer\s+\S+|token[=:\s]+\S+|api[_-]?key[=:\s]+\S+)"
-)
 
 
 class _AuditLike(Protocol):
@@ -58,7 +56,7 @@ def _detection_path(flag: InjectionFlag) -> str:
 
 
 def _scrub_secrets(text: str) -> str:
-    return _SECRETISH_RE.sub("[redacted]", text)
+    return scrub_secretish(text)
 
 
 def _candidate_literal(flag: InjectionFlag) -> str:
