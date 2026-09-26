@@ -258,9 +258,9 @@ flowchart LR
   - Concurrent-ish sequential appends keep hash links (single-writer is fine).
   - Query by `process` / `event_type`.
 
-##### 1.5 PII redaction helper
-- **Deliverables:** Redact banking-like fields before log/dashboard (hash or `***`).
-- **Tests:** Known IBAN/account patterns not stored in cleartext in audit payload.
+##### 1.5 PII / secret redaction helper
+- **Deliverables:** Configurable detectors (email, phone, US SSN-shaped IDs, API keys/bearer tokens, banking) with separate detect → redact pipeline; redact before audit hash/persist; optional process policy `redact|block|escalate` (default **redact** so allow/block decisions are unchanged). Docs: `docs/sensitive-data.md`.
+- **Tests:** Nested payloads, prompt/context text, false positives, secrets never in stored audit, telemetry `sanitize_for_export`, opt-in block vs default no decision change, hash chain still verifies.
 
 #### Phase 1 exit gate
 

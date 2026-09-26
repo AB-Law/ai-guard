@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field
 
 _CONFIGS_DIR = Path(__file__).resolve().parent
+
+SensitiveAction = Literal["redact", "block", "escalate"]
 
 # (resolved path, mtime_ns) -> ProcessConfig
 _process_cache: dict[tuple[str, int], ProcessConfig] = {}
@@ -43,6 +46,29 @@ class ApprovalThreshold(BaseModel):
     risk_score_gte: int = Field(ge=0, le=100)
 
 
+class SensitiveDetectorConfig(BaseModel):
+    """Per-detector override. Default action is redact (audit minimize only)."""
+
+    enabled: bool = True
+    action: SensitiveAction = "redact"
+    min_confidence: float = Field(default=0.55, ge=0.0, le=1.0)
+
+
+class SensitiveDataConfig(BaseModel):
+    """Optional process-level sensitive-data policy.
+
+    When omitted, built-in defaults apply: detectors enabled with action=redact.
+    That expands what is minimized in audit storage but does **not** change
+    gateway allow/block/escalate unless a detector's action is set to block or
+    escalate explicitly.
+    """
+
+    enabled: bool = True
+    default_action: SensitiveAction = "redact"
+    min_confidence: float = Field(default=0.55, ge=0.0, le=1.0)
+    detectors: dict[str, SensitiveDetectorConfig] = Field(default_factory=dict)
+
+
 class ProcessConfig(BaseModel):
     process: str
     allowed_tools: list[AllowedTool]
@@ -55,6 +81,8 @@ class ProcessConfig(BaseModel):
     # POST /configs wizard always set it, since a slugified id makes a poor
     # display name ("claims_review_v2" vs "Claims Review v2").
     title: str | None = None
+    # Optional — omit for redact-only defaults (no decision impact).
+    sensitive_data: SensitiveDataConfig | None = None
 
 
 def clear_process_cache() -> None:

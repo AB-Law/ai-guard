@@ -8,6 +8,12 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from audit.log_store import AppendInput, AuditLogStore
+from audit.sensitive_data.detectors import detect_in_text, detect_in_value
+from audit.sensitive_data.policy import (
+    finding_summaries,
+    resolve_policy,
+    strongest_decision_action,
+)
 from configs.loader import ProcessConfig
 from contracts.schemas import (
     GatewayDecision,
@@ -25,6 +31,66 @@ from guardrails import (
     policy_learning,
     risk_scorer,
 )
+
+_DECISION_RANK = {"allow": 0, "escalate": 1, "block": 2}
+
+
+def _upgrade_decision(
+    current: GatewayDecision,
+    *,
+    action: str,
+    reason: str,
+    policy_refs: list[str],
+) -> GatewayDecision:
+    """Upgrade allow→escalate→block; never soften a harder decision."""
+    if _DECISION_RANK.get(action, 0) <= _DECISION_RANK.get(current.decision, 0):
+        return current
+    return GatewayDecision(
+        call_id=current.call_id,
+        decision=action,  # type: ignore[arg-type]
+        reason=reason,
+        policy_refs=list(dict.fromkeys([*current.policy_refs, *policy_refs])),
+        risk_score=max(current.risk_score, 80 if action == "escalate" else 100),
+        confidence_score=current.confidence_score,
+        evidence_score=current.evidence_score,
+    )
+
+
+def apply_sensitive_data_policy(
+    request: ToolCallRequest,
+    config: ProcessConfig,
+    decision: GatewayDecision,
+    *,
+    context_texts: list[str] | None = None,
+) -> tuple[GatewayDecision, list[dict[str, object]]]:
+    """Opt-in block/escalate from sensitive-data findings.
+
+    Default process configs use action=redact only, so this returns the
+    original decision unchanged. Findings summaries never include raw values.
+    """
+    policy = resolve_policy(config)
+    if not policy.enabled:
+        return decision, []
+
+    findings = list(detect_in_value(request.tool_args, path="tool_args"))
+    findings.extend(detect_in_text(request.agent_rationale or "", path="agent_rationale"))
+    for i, text in enumerate(context_texts or []):
+        findings.extend(detect_in_text(text or "", path=f"context[{i}]"))
+
+    action = strongest_decision_action(findings, policy)
+    summaries = finding_summaries(findings, policy)
+    if action is None:
+        return decision, summaries
+
+    types = sorted({str(s["type"]) for s in summaries if s.get("action") == action})
+    ref = f"sensitive_data:{action}"
+    reason = (
+        f"Sensitive data policy {action} on detector(s): {', '.join(types) or 'unknown'}"
+    )
+    upgraded = _upgrade_decision(
+        decision, action=action, reason=reason, policy_refs=[ref]
+    )
+    return upgraded, summaries
 
 
 def is_hard_block(request: ToolCallRequest, config: ProcessConfig) -> bool:
@@ -337,23 +403,39 @@ def evaluate_tool_call(
             evidence_score=0.0,
         )
 
+    # Opt-in sensitive-data block/escalate (default configs: redact-only, no-op).
+    decision, sensitive_summaries = apply_sensitive_data_policy(
+        request,
+        config,
+        decision,
+        context_texts=list(retrieved_texts or context_chunks or chunks or []),
+    )
+
     timings["total_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+
+    policy_payload: dict[str, Any] = {
+        "call_id": request.call_id,
+        "case_id": request.case_id,
+        "reason": decision.reason,
+        "policy_refs": decision.policy_refs,
+        "unsupported_claims": verification.unsupported_claims,
+        "entailment": entailment.model_dump(),
+        "missing_evidence_docs": missing,
+        "stage_timings_ms": dict(timings),
+    }
+    if sensitive_summaries and any(
+        s.get("action") in ("block", "escalate") for s in sensitive_summaries
+    ):
+        policy_payload["sensitive_data_findings"] = [
+            s for s in sensitive_summaries if s.get("action") in ("block", "escalate")
+        ]
 
     audit_entries.append(
         AppendInput(
             process=request.process,
             step_id=request.step_id,
             event_type="policy_check",
-            payload={
-                "call_id": request.call_id,
-                "case_id": request.case_id,
-                "reason": decision.reason,
-                "policy_refs": decision.policy_refs,
-                "unsupported_claims": verification.unsupported_claims,
-                "entailment": entailment.model_dump(),
-                "missing_evidence_docs": missing,
-                "stage_timings_ms": dict(timings),
-            },
+            payload=policy_payload,
             scores=decision,
         )
     )

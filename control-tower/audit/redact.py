@@ -1,59 +1,28 @@
-"""PII redaction before audit persistence — ARCHITECTURE §9."""
+"""PII / secret redaction before audit persistence — ARCHITECTURE §9.
+
+Public facade over audit.sensitive_data. Detection is separate from redaction;
+callers that need findings should use detect_in_value / detect_in_text.
+"""
 
 from __future__ import annotations
 
-import hashlib
-import re
 from typing import Any
 
-# ISO 13616 IBAN (simplified: country + check + alphanumerics, 15–34 chars)
-_IBAN_RE = re.compile(r"\b[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}\b", re.IGNORECASE)
-# US-style account numbers (8–17 digits) when labeled
-_ACCOUNT_LABELED_RE = re.compile(
-    r"(account\s*(?:number|no\.?|#)?\s*[:=]?\s*)([0-9]{8,17})",
-    re.IGNORECASE,
-)
-_SENSITIVE_KEY_RE = re.compile(
-    r"(iban|account_number|bank_account|routing|swift|sort_code)",
-    re.IGNORECASE,
-)
+from audit.sensitive_data.detectors import detect_in_text, hash_value, scrub_secretish
+from audit.sensitive_data.policy import default_policy
+from audit.sensitive_data.redact import apply_redactions, redact_value
 
-_REDACTED = "***"
+_INJECTION_SPAN_PREVIEW = 40
 _HASH_PREFIX = "sha256:"
 
 
-def _hash_value(value: str) -> str:
-    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
-    return f"{_HASH_PREFIX}{digest[:16]}"
-
-
-def _redact_string(text: str) -> str:
-    out = _IBAN_RE.sub(lambda m: _hash_value(m.group(0)), text)
-    out = _ACCOUNT_LABELED_RE.sub(lambda m: f"{m.group(1)}{_REDACTED}", out)
-    return out
-
-
 def redact_payload(value: Any) -> Any:
-    """Recursively redact banking-like strings and sensitive dict keys."""
-    if isinstance(value, dict):
-        result: dict[Any, Any] = {}
-        for key, item in value.items():
-            if _SENSITIVE_KEY_RE.search(str(key)):
-                if isinstance(item, str):
-                    result[key] = _hash_value(item) if len(item) > 4 else _REDACTED
-                else:
-                    result[key] = _REDACTED
-            else:
-                result[key] = redact_payload(item)
-        return result
-    if isinstance(value, list):
-        return [redact_payload(item) for item in value]
-    if isinstance(value, str):
-        return _redact_string(value)
-    return value
+    """Recursively redact PII/secrets using the default sensitive-data policy.
 
-
-_INJECTION_SPAN_PREVIEW = 40
+    Used by audit stores before hashing and persistence. Deterministic so the
+    hash chain remains verifiable.
+    """
+    return redact_value(value)
 
 
 def redact_injection_span(span: str) -> dict[str, str]:
@@ -63,13 +32,11 @@ def redact_injection_span(span: str) -> dict[str, str]:
     raw attack text in incidents, cases, or approval payloads.
     """
     text = (span or "").replace("\n", " ").strip()
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    # Scrub secret-shaped tokens from the preview window itself.
-    scrubbed = re.sub(
-        r"(?i)(?:sk-[a-z0-9_-]{8,}|bearer\s+\S+|token[=:\s]+\S+|api[_-]?key[=:\s]+\S+)",
-        "[redacted]",
-        text,
-    )
+    digest = hash_value(text, full=True).removeprefix(_HASH_PREFIX)
+    scrubbed = scrub_secretish(text)
+    findings = detect_in_text(scrubbed, path="")
+    scrubbed_val = apply_redactions(scrubbed, findings, policy=default_policy())
+    scrubbed = scrubbed_val if isinstance(scrubbed_val, str) else str(scrubbed_val)
     preview = scrubbed[:_INJECTION_SPAN_PREVIEW]
     if len(scrubbed) > _INJECTION_SPAN_PREVIEW:
         preview = preview + "…"

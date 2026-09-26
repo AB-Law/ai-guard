@@ -211,7 +211,8 @@ control-tower/
 ├── agent/            # LangGraph agent: retrieve -> scan_injection -> reason -> propose_tool -> gateway_check -> execute/interrupt -> finalize
 ├── guardrails/        # Injection guard, tool-call gateway, output verifier, risk scorer, policy entailment
 │   └── POLICY_ENTAILMENT_RUBRIC.md  # Fixed system-prompt rubric (violation / borderline / compliant)
-├── audit/            # Hash-chained SQLite audit log + PII redaction
+├── audit/            # Hash-chained audit log + configurable PII/secret redaction
+├── docs/             # Operator docs (e.g. sensitive-data.md)
 ├── contracts/         # Shared Pydantic schemas (ToolCallRequest, GatewayDecision, AuditLogEntry)
 ├── knowledge/         # RAG over policy/vendor docs (Chroma)
 ├── configs/           # Per-process YAML (procurement_review, onboarding_kyc)
