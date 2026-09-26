@@ -43,6 +43,8 @@ from investigation_assistant.qa_agent import (
 )
 from knowledge.rag import KnowledgeBase, build_kb_for_process, source_for_path, uploads_dir
 from scripts.demo_pack import REHEARSAL_IDS, load_rehearsal_bodies
+from telemetry.setup import configure_telemetry, shutdown_telemetry
+from telemetry.tracing import current_trace_id, start_span
 
 _ALLOWED_UPLOAD_SUFFIXES = {".md", ".txt", ".csv"}
 _MAX_UPLOAD_BYTES = 2 * 1024 * 1024
@@ -370,8 +372,11 @@ def create_app(
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
-        yield
-        app.state._close_checkpointer()
+        try:
+            yield
+        finally:
+            shutdown_telemetry()
+            app.state._close_checkpointer()
 
     app = FastAPI(title="Aegis Control Tower", version="0.1.0", lifespan=_lifespan)
     app.state.root = root
@@ -428,6 +433,7 @@ def create_app(
             "request": result.get("request"),
             "source_app": source_app if source_app is not None else existing.get("source_app"),
             "created_at": existing.get("created_at") or _utc_now(),
+            "trace_id": current_trace_id(),
         }
         store.cases[case_id] = record
         if call_id:
@@ -1004,35 +1010,44 @@ def create_app(
         agent/graph.py's interrupt_for_approval audit shape (event_type=
         "approval") so this shows up the same way in the audit trail whether
         the call went through /cases or /guard/evaluate."""
-        gw = dict(case.get("gateway_decision") or {})
-        new_decision = "allow" if action == "approve" else "block"
-        original_reason = gw.get("reason", "")
-        gw["decision"] = new_decision
-        gw["reason"] = f"Escalated call {action}d by {actor}. Original: {original_reason}"
-        case["gateway_decision"] = gw
-        case["status"] = "completed" if action == "approve" else "rejected"
-        case["resolved_at"] = _utc_now()
-        case["resolved_by"] = actor
+        with start_span(
+            "aegis.approval.resolve",
+            attributes={
+                "case_id": case.get("case_id"),
+                "call_id": case.get("call_id"),
+                "process": case.get("process"),
+                "source_app": case.get("source_app"),
+            },
+        ):
+            gw = dict(case.get("gateway_decision") or {})
+            new_decision = "allow" if action == "approve" else "block"
+            original_reason = gw.get("reason", "")
+            gw["decision"] = new_decision
+            gw["reason"] = f"Escalated call {action}d by {actor}. Original: {original_reason}"
+            case["gateway_decision"] = gw
+            case["status"] = "completed" if action == "approve" else "rejected"
+            case["resolved_at"] = _utc_now()
+            case["resolved_by"] = actor
 
-        app.state.audit.append(
-            AppendInput(
-                process=case["process"],
-                step_id="guard_approval",
-                event_type="approval",
-                payload={
-                    "case_id": case["case_id"],
-                    "call_id": case["call_id"],
-                    "action": action,
-                    "actor": actor,
-                },
-                scores=GatewayDecision.model_validate(gw),
+            app.state.audit.append(
+                AppendInput(
+                    process=case["process"],
+                    step_id="guard_approval",
+                    event_type="approval",
+                    payload={
+                        "case_id": case["case_id"],
+                        "call_id": case["call_id"],
+                        "action": action,
+                        "actor": actor,
+                    },
+                    scores=GatewayDecision.model_validate(gw),
+                )
             )
-        )
-        # DB-backed CaseStore returns copies — must re-assign after mutate.
-        store.cases[case["case_id"]] = case
-        if case.get("call_id"):
-            store.call_to_case[case["call_id"]] = case["case_id"]
-        return _guard_case_snapshot(case)
+            # DB-backed CaseStore returns copies — must re-assign after mutate.
+            store.cases[case["case_id"]] = case
+            if case.get("call_id"):
+                store.call_to_case[case["call_id"]] = case["case_id"]
+            return _guard_case_snapshot(case)
 
     def _resolve_policy_change_case(
         case: dict[str, Any], *, action: str, actor: str, rule_text: str | None = None
@@ -1253,13 +1268,22 @@ def create_app(
                 case, action=body.action, actor=body.actor, rule_text=body.rule_text
             )
 
-        result = resume_case(
-            app.state.graph,
-            thread_id=case_id,
-            action=body.action,
-            actor=body.actor,
-        )
-        return _snapshot_case(case_id, result)
+        with start_span(
+            "aegis.approval.resolve",
+            attributes={
+                "case_id": case_id,
+                "call_id": call_id,
+                "process": case.get("process"),
+                "source_app": case.get("source_app"),
+            },
+        ):
+            result = resume_case(
+                app.state.graph,
+                thread_id=case_id,
+                action=body.action,
+                actor=body.actor,
+            )
+            return _snapshot_case(case_id, result)
 
     @app.post("/demo/reset", dependencies=[Depends(require_dashboard_token)])
     def demo_reset() -> dict[str, Any]:
@@ -1749,6 +1773,8 @@ def create_app(
         token = auth.create_access_token("dashboard")
         return {"access_token": token, "token_type": "bearer"}
 
+    # After routes are registered so FastAPIInstrumentor can wrap them.
+    configure_telemetry(app=app)
     return app
 
 

@@ -157,6 +157,34 @@ docker run -d -e POSTGRES_USER=aegis -e POSTGRES_PASSWORD=aegis -e POSTGRES_DB=a
 AEGIS_TEST_POSTGRES_URL=postgresql://aegis:aegis@localhost:5544/aegis pytest -m postgres
 ```
 
+## Observability (OpenTelemetry)
+
+Tracing is **off by default**. When disabled, spans are no-ops and no exporter or collector is required.
+
+**Local / no exporter** — create in-process spans without shipping them:
+
+```bash
+set AEGIS_OTEL_ENABLED=1
+set OTEL_SERVICE_NAME=aegis
+uvicorn api.main:app --reload
+```
+
+**OTLP collector** — export over HTTP/protobuf (standard W3C `traceparent` on the wire):
+
+```bash
+set AEGIS_OTEL_ENABLED=1
+set OTEL_SERVICE_NAME=aegis
+set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+set OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+uvicorn api.main:app --reload
+```
+
+Optional: `OTEL_EXPORTER_OTLP_HEADERS` for collector auth (`key=value,key2=value2`).
+
+Instrumented boundaries: incoming HTTP, case run/resume, guard evaluate, approval resolve, retrieval, and audit append. Span attributes are limited to `case_id`, `call_id`, `process`, `source_app`, and `decision` — never raw prompts, tool args, or API keys. Audit rows and `GatewayDecision` responses may include an optional `trace_id` (hex) that is **not** part of the hash-chain material.
+
+The `aiguard` SDK injects W3C trace-context headers when `opentelemetry-api` is installed (`pip install "aiguard[otel]"`).
+
 ## Run scenario fixtures (no API/dashboard needed)
 
 ```bash

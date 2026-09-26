@@ -16,6 +16,10 @@ dependencies = [
     "pyyaml",
     "httpx",
     "python-dotenv",
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "opentelemetry-instrumentation-fastapi",
 ]
 
 [project.optional-dependencies]
@@ -50,6 +54,7 @@ include = [
     "knowledge*",
     "investigation_assistant*",
     "scripts*",
+    "telemetry*",
 ]
 
 [tool.pytest.ini_options]

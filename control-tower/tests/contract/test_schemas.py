@@ -77,6 +77,33 @@ def test_audit_log_entry_rejects_bad_event_type() -> None:
         )
 
 
+def test_optional_trace_id_on_schemas() -> None:
+    gd = GatewayDecision(
+        call_id="c-1",
+        decision="allow",
+        reason="ok",
+        policy_refs=[],
+        risk_score=5,
+        confidence_score=0.9,
+        evidence_score=0.8,
+        trace_id="a" * 32,
+    )
+    assert gd.trace_id == "a" * 32
+    entry = AuditLogEntry(
+        entry_id="e-1",
+        process="procurement_review",
+        step_id="gateway_check",
+        event_type="policy_check",
+        payload={},
+        scores=gd,
+        timestamp="2026-01-01T00:00:00+00:00",
+        prev_hash="0" * 64,
+        entry_hash="b" * 64,
+        trace_id="a" * 32,
+    )
+    assert entry.trace_id == "a" * 32
+
+
 def test_json_round_trip() -> None:
     req = _sample_tool_call()
     restored = ToolCallRequest.model_validate_json(req.model_dump_json())

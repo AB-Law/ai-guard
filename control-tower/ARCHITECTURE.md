@@ -245,7 +245,7 @@ What a production version changes, stated explicitly so the "credible path to sc
 - SQLite → append-only, WORM-compliant audit store (e.g., a database with write-protection at the storage layer)
 - Process configs → versioned and owned per business unit, with RBAC on who can edit thresholds
 - Tool gateway → deployed as a sidecar/proxy pattern, reusable in front of any agent framework, not just this one
-- Add OpenTelemetry tracing for production observability
+- OpenTelemetry tracing for production observability (optional; see README "Observability")
 - CI/CD and infra-as-code for the config repository, so policy changes go through the same review process as code
 
 ---
@@ -269,6 +269,7 @@ control-tower/
 ├── audit/
 │   ├── log_store.py           # SQLite + hash chain
 │   └── schema.sql
+├── telemetry/                 # optional OpenTelemetry (no-op when disabled)
 ├── data/
 │   ├── procurement_policy.md
 │   ├── vendor_master.csv

@@ -13,6 +13,7 @@ from typing import Any
 
 from audit.redact import redact_payload
 from contracts.schemas import AuditLogEntry, GatewayDecision
+from telemetry.tracing import current_trace_id, start_span
 
 GENESIS_PREV_HASH = "0" * 64
 
@@ -35,6 +36,22 @@ class AppendInput:
     scores: GatewayDecision | None = None
     entry_id: str | None = None
     timestamp: str | None = None
+    # Non-hashed OTel correlation; defaults to the active span's trace id.
+    trace_id: str | None = None
+
+
+def _ensure_trace_id_column(conn: sqlite3.Connection) -> None:
+    """Add trace_id to existing DBs created before this column existed."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(audit_log)").fetchall()}
+    if "trace_id" not in cols:
+        conn.execute("ALTER TABLE audit_log ADD COLUMN trace_id TEXT")
+        conn.commit()
+
+
+def resolve_entry_trace_id(entry: AppendInput) -> str | None:
+    if entry.trace_id is not None:
+        return entry.trace_id
+    return current_trace_id()
 
 
 class AuditLogStore:
@@ -62,6 +79,7 @@ class AuditLogStore:
         sql = schema_path.read_text(encoding="utf-8")
         with self._connect() as conn:
             conn.executescript(sql)
+            _ensure_trace_id_column(conn)
 
     def _last_entry_hash(self, conn: sqlite3.Connection) -> str:
         row = conn.execute(
@@ -82,58 +100,68 @@ class AuditLogStore:
         if not entries:
             return []
 
-        results: list[AuditLogEntry] = []
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                prev_hash = self._last_entry_hash(conn)
-                for entry in entries:
-                    redacted_payload = redact_payload(entry.payload)
-                    timestamp = entry.timestamp or datetime.now(UTC).isoformat()
-                    entry_id = entry.entry_id or str(uuid.uuid4())
-                    entry_hash = compute_entry_hash(prev_hash, redacted_payload, timestamp)
-                    scores_json: str | None = None
-                    if entry.scores is not None:
-                        scores_json = entry.scores.model_dump_json()
-
-                    conn.execute(
-                        """
-                        INSERT INTO audit_log (
-                            entry_id, process, step_id, event_type,
-                            payload_json, scores_json, timestamp, prev_hash, entry_hash
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            entry_id,
-                            entry.process,
-                            entry.step_id,
-                            entry.event_type,
-                            canonical_json(redacted_payload),
-                            scores_json,
-                            timestamp,
-                            prev_hash,
-                            entry_hash,
-                        ),
-                    )
-                    results.append(
-                        AuditLogEntry(
-                            entry_id=entry_id,
-                            process=entry.process,
-                            step_id=entry.step_id,
-                            event_type=entry.event_type,  # type: ignore[arg-type]
-                            payload=redacted_payload,
-                            scores=entry.scores,
-                            timestamp=timestamp,
-                            prev_hash=prev_hash,
-                            entry_hash=entry_hash,
+        with start_span(
+            "aegis.audit.append",
+            attributes={"process": entries[0].process},
+        ):
+            results: list[AuditLogEntry] = []
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    prev_hash = self._last_entry_hash(conn)
+                    for entry in entries:
+                        redacted_payload = redact_payload(entry.payload)
+                        timestamp = entry.timestamp or datetime.now(UTC).isoformat()
+                        entry_id = entry.entry_id or str(uuid.uuid4())
+                        entry_hash = compute_entry_hash(
+                            prev_hash, redacted_payload, timestamp
                         )
-                    )
-                    prev_hash = entry_hash
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
-        return results
+                        scores_json: str | None = None
+                        if entry.scores is not None:
+                            scores_json = entry.scores.model_dump_json()
+                        tid = resolve_entry_trace_id(entry)
+
+                        conn.execute(
+                            """
+                            INSERT INTO audit_log (
+                                entry_id, process, step_id, event_type,
+                                payload_json, scores_json, timestamp, prev_hash,
+                                entry_hash, trace_id
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                entry_id,
+                                entry.process,
+                                entry.step_id,
+                                entry.event_type,
+                                canonical_json(redacted_payload),
+                                scores_json,
+                                timestamp,
+                                prev_hash,
+                                entry_hash,
+                                tid,
+                            ),
+                        )
+                        results.append(
+                            AuditLogEntry(
+                                entry_id=entry_id,
+                                process=entry.process,
+                                step_id=entry.step_id,
+                                event_type=entry.event_type,  # type: ignore[arg-type]
+                                payload=redacted_payload,
+                                scores=entry.scores,
+                                timestamp=timestamp,
+                                prev_hash=prev_hash,
+                                entry_hash=entry_hash,
+                                trace_id=tid,
+                            )
+                        )
+                        prev_hash = entry_hash
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+            return results
 
     def index_incident(
         self,
@@ -252,6 +280,8 @@ class AuditLogStore:
             scores = None
             if row["scores_json"]:
                 scores = GatewayDecision.model_validate_json(row["scores_json"])
+            keys = row.keys()
+            tid = row["trace_id"] if "trace_id" in keys else None
             entries.append(
                 AuditLogEntry(
                     entry_id=row["entry_id"],
@@ -263,6 +293,7 @@ class AuditLogStore:
                     timestamp=row["timestamp"],
                     prev_hash=row["prev_hash"],
                     entry_hash=row["entry_hash"],
+                    trace_id=tid,
                 )
             )
         return entries

@@ -11,6 +11,7 @@ From this directory:
 ```bash
 pip install -e .              # plain Python / decorator usage
 pip install -e ".[langchain]" # + the LangChain callback handler
+pip install -e ".[otel]"      # + W3C traceparent injection on outbound calls
 ```
 
 ## Setup
@@ -133,6 +134,10 @@ with GuardClient(api_key="sk_live_…") as client:
 ```
 
 Authenticated `/guard/evaluate` traffic also updates `last_seen_at`. Health (`online` / `stale` / `offline` / `never_seen`) is derived only from that timestamp.
+
+## Tracing
+
+With `aiguard[otel]` (or any environment that already has `opentelemetry-api`), every outbound call injects standard W3C `traceparent` / `tracestate` headers from the active span. The tower extracts them on `/guard/*` so SDK and API spans share one trace. No proprietary trace IDs.
 
 ## Roadmap (not built yet)
 

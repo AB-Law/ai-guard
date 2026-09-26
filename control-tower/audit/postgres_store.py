@@ -13,9 +13,16 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from audit.log_store import GENESIS_PREV_HASH, AppendInput, canonical_json, compute_entry_hash
+from audit.log_store import (
+    GENESIS_PREV_HASH,
+    AppendInput,
+    canonical_json,
+    compute_entry_hash,
+    resolve_entry_trace_id,
+)
 from audit.redact import redact_payload
 from contracts.schemas import AuditLogEntry, GatewayDecision
+from telemetry.tracing import start_span
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -28,7 +35,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
     scores_json TEXT,
     timestamp TEXT NOT NULL,
     prev_hash TEXT NOT NULL,
-    entry_hash TEXT NOT NULL
+    entry_hash TEXT NOT NULL,
+    trace_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_process ON audit_log(process);
@@ -72,6 +80,7 @@ class PostgresAuditLogStore:
     def _init_db(self) -> None:
         with self._connect() as conn:
             conn.execute(_SCHEMA)
+            conn.execute("ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS trace_id TEXT")
             conn.commit()
 
     def _last_entry_hash(self, conn: psycopg.Connection) -> str:
@@ -96,56 +105,66 @@ class PostgresAuditLogStore:
         import uuid
         from datetime import datetime
 
-        results: list[AuditLogEntry] = []
-        with self._connect() as conn:
-            # Serialize tip updates across workers.
-            conn.execute("SELECT pg_advisory_xact_lock(%s)", (87201401,))
-            tip = conn.execute(
-                "SELECT entry_hash FROM audit_log ORDER BY rowid DESC LIMIT 1 FOR UPDATE"
-            ).fetchone()
-            prev_hash = tip["entry_hash"] if tip else GENESIS_PREV_HASH
-            for entry in entries:
-                redacted_payload = redact_payload(entry.payload)
-                timestamp = entry.timestamp or datetime.now(UTC).isoformat()
-                entry_id = entry.entry_id or str(uuid.uuid4())
-                entry_hash = compute_entry_hash(prev_hash, redacted_payload, timestamp)
-                scores_json = entry.scores.model_dump_json() if entry.scores is not None else None
-
-                conn.execute(
-                    """
-                    INSERT INTO audit_log (
-                        entry_id, process, step_id, event_type,
-                        payload_json, scores_json, timestamp, prev_hash, entry_hash
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        entry_id,
-                        entry.process,
-                        entry.step_id,
-                        entry.event_type,
-                        canonical_json(redacted_payload),
-                        scores_json,
-                        timestamp,
-                        prev_hash,
-                        entry_hash,
-                    ),
-                )
-                results.append(
-                    AuditLogEntry(
-                        entry_id=entry_id,
-                        process=entry.process,
-                        step_id=entry.step_id,
-                        event_type=entry.event_type,  # type: ignore[arg-type]
-                        payload=redacted_payload,
-                        scores=entry.scores,
-                        timestamp=timestamp,
-                        prev_hash=prev_hash,
-                        entry_hash=entry_hash,
+        with start_span(
+            "aegis.audit.append",
+            attributes={"process": entries[0].process},
+        ):
+            results: list[AuditLogEntry] = []
+            with self._connect() as conn:
+                # Serialize tip updates across workers.
+                conn.execute("SELECT pg_advisory_xact_lock(%s)", (87201401,))
+                tip = conn.execute(
+                    "SELECT entry_hash FROM audit_log ORDER BY rowid DESC LIMIT 1 FOR UPDATE"
+                ).fetchone()
+                prev_hash = tip["entry_hash"] if tip else GENESIS_PREV_HASH
+                for entry in entries:
+                    redacted_payload = redact_payload(entry.payload)
+                    timestamp = entry.timestamp or datetime.now(UTC).isoformat()
+                    entry_id = entry.entry_id or str(uuid.uuid4())
+                    entry_hash = compute_entry_hash(prev_hash, redacted_payload, timestamp)
+                    scores_json = (
+                        entry.scores.model_dump_json() if entry.scores is not None else None
                     )
-                )
-                prev_hash = entry_hash
-            conn.commit()
-        return results
+                    tid = resolve_entry_trace_id(entry)
+
+                    conn.execute(
+                        """
+                        INSERT INTO audit_log (
+                            entry_id, process, step_id, event_type,
+                            payload_json, scores_json, timestamp, prev_hash,
+                            entry_hash, trace_id
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            entry_id,
+                            entry.process,
+                            entry.step_id,
+                            entry.event_type,
+                            canonical_json(redacted_payload),
+                            scores_json,
+                            timestamp,
+                            prev_hash,
+                            entry_hash,
+                            tid,
+                        ),
+                    )
+                    results.append(
+                        AuditLogEntry(
+                            entry_id=entry_id,
+                            process=entry.process,
+                            step_id=entry.step_id,
+                            event_type=entry.event_type,  # type: ignore[arg-type]
+                            payload=redacted_payload,
+                            scores=entry.scores,
+                            timestamp=timestamp,
+                            prev_hash=prev_hash,
+                            entry_hash=entry_hash,
+                            trace_id=tid,
+                        )
+                    )
+                    prev_hash = entry_hash
+                conn.commit()
+            return results
 
     def index_incident(
         self,
@@ -271,6 +290,7 @@ class PostgresAuditLogStore:
                     timestamp=row["timestamp"],
                     prev_hash=row["prev_hash"],
                     entry_hash=row["entry_hash"],
+                    trace_id=row.get("trace_id"),
                 )
             )
         return entries

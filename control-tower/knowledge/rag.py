@@ -13,6 +13,8 @@ from pathlib import Path
 import chromadb
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
 
+from telemetry.tracing import start_span
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _DIM = 64
 _TOKEN_RE = re.compile(r"[a-z0-9_]+", re.IGNORECASE)
@@ -166,23 +168,24 @@ class KnowledgeBase:
         return len(self._docs)
 
     def retrieve(self, query: str, k: int = 4) -> list[RetrievedChunk]:
-        if not self._docs:
-            return []
-        n = min(k, len(self._docs))
-        result = self._collection.query(query_texts=[query], n_results=n)
-        ids = (result.get("ids") or [[]])[0]
-        docs = (result.get("documents") or [[]])[0]
-        metas = (result.get("metadatas") or [[]])[0]
-        chunks: list[RetrievedChunk] = []
-        for i, chunk_id in enumerate(ids):
-            text = docs[i] if i < len(docs) else self._docs[chunk_id].text
-            source = ""
-            if i < len(metas) and metas[i]:
-                source = str(metas[i].get("source", ""))
-            elif chunk_id in self._docs:
-                source = self._docs[chunk_id].source
-            chunks.append(RetrievedChunk(id=chunk_id, text=text, source=source))
-        return chunks
+        with start_span("aegis.retrieval"):
+            if not self._docs:
+                return []
+            n = min(k, len(self._docs))
+            result = self._collection.query(query_texts=[query], n_results=n)
+            ids = (result.get("ids") or [[]])[0]
+            docs = (result.get("documents") or [[]])[0]
+            metas = (result.get("metadatas") or [[]])[0]
+            chunks: list[RetrievedChunk] = []
+            for i, chunk_id in enumerate(ids):
+                text = docs[i] if i < len(docs) else self._docs[chunk_id].text
+                source = ""
+                if i < len(metas) and metas[i]:
+                    source = str(metas[i].get("source", ""))
+                elif chunk_id in self._docs:
+                    source = self._docs[chunk_id].source
+                chunks.append(RetrievedChunk(id=chunk_id, text=text, source=source))
+            return chunks
 
     def get_by_id(self, chunk_id: str) -> RetrievedChunk | None:
         return self._docs.get(chunk_id)
