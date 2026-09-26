@@ -1,7 +1,7 @@
-"""Thin HTTP client for the tower's /guard/* endpoints — POST /guard/evaluate
-plus the approval pair (GET/POST /guard/approvals/{call_id}). No chromadb/
-langgraph/fastapi dependency; the policy engine and approval state live
-entirely on the tower side, this just asks it questions per tool call.
+"""Thin HTTP client for the tower's /guard/* and /applications inventory
+endpoints — POST /guard/evaluate, the approval pair, plus heartbeat and
+inventory metadata updates. No chromadb/langgraph/fastapi dependency; the
+policy engine and approval state live entirely on the tower side.
 """
 
 from __future__ import annotations
@@ -106,6 +106,32 @@ class GuardClient:
         resp = self._http.post(
             f"{self.api_url}/guard/approvals/{call_id}",
             json={"action": action, "actor": actor},
+            headers=self._headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def heartbeat(self) -> dict[str, Any]:
+        """POST /applications/heartbeat — stamps last_seen_at for the
+        authenticated application identity (never accepts a caller-supplied
+        source_app). Returns the application inventory view.
+        """
+        resp = self._http.post(
+            f"{self.api_url}/applications/heartbeat",
+            headers=self._headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def update_inventory(self, app_id: str, **fields: Any) -> dict[str, Any]:
+        """PATCH /applications/{app_id} — update declared inventory metadata
+        (owner, tools, mcp_servers, …). The tower enforces that an API key
+        may only update its own app_id.
+        """
+        resp = self._http.request(
+            "PATCH",
+            f"{self.api_url}/applications/{app_id}",
+            json=fields,
             headers=self._headers(),
         )
         resp.raise_for_status()

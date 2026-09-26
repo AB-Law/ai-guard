@@ -122,6 +122,13 @@ export interface ConfigsResponse {
 
 export type AppEnvironment = 'production' | 'staging'
 export type AppStatus = 'connected' | 'revoked'
+export type AppHealth = 'online' | 'stale' | 'offline' | 'never_seen'
+
+export interface DeclaredMcpServer {
+  name: string
+  url?: string | null
+  tools: string[]
+}
 
 export interface Application {
   app_id: string
@@ -130,11 +137,24 @@ export interface Application {
   process: string
   source_app: string
   status: AppStatus
+  health: AppHealth | null
   key_display: string
   created_at: string
   revoked_at: string | null
   requests_today: number
-  last_seen: string | null
+  last_seen_at: string | null
+  /** Alias of last_seen_at for older clients. */
+  last_seen?: string | null
+  owner?: string | null
+  team?: string | null
+  description?: string | null
+  framework?: string | null
+  runtime?: string | null
+  tools?: string[]
+  capabilities?: string[]
+  mcp_servers?: DeclaredMcpServer[]
+  /** Tool names seen in case traffic for this source_app — not MCP discovery. */
+  observed_tools?: string[]
 }
 
 export interface ApplicationWithKey extends Application {

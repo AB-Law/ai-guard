@@ -285,21 +285,56 @@ export const handlers = [
       name: string
       environment: 'production' | 'staging'
       process: string
+      source_app?: string
     }
     const created = {
       ...createdApplication,
       name: body.name,
       environment: body.environment,
       process: body.process,
+      source_app: body.source_app ?? createdApplication.source_app,
+      health: 'never_seen' as const,
+      last_seen_at: null,
+      last_seen: null,
     }
     appsState = [created, ...appsState]
     return HttpResponse.json(created)
   }),
 
+  http.patch(api('/applications/:appId'), async ({ params, request }) => {
+    const body = (await request.json()) as Record<string, unknown>
+    appsState = appsState.map((a) =>
+      a.app_id === params.appId
+        ? {
+            ...a,
+            ...body,
+            // Never leak key material on update responses.
+            api_key: undefined,
+          }
+        : a,
+    ) as typeof appsState
+    const found = appsState.find((a) => a.app_id === params.appId)
+    return HttpResponse.json(found ?? applications[0])
+  }),
+
+  http.post(api('/applications/heartbeat'), () => {
+    const now = new Date().toISOString()
+    const target = appsState.find((a) => a.status === 'connected') ?? appsState[0]
+    if (!target) return HttpResponse.json({ detail: 'not found' }, { status: 404 })
+    const updated = { ...target, last_seen_at: now, last_seen: now, health: 'online' as const }
+    appsState = appsState.map((a) => (a.app_id === updated.app_id ? updated : a))
+    return HttpResponse.json(updated)
+  }),
+
   http.post(api('/applications/:appId/revoke'), ({ params }) => {
     appsState = appsState.map((a) =>
       a.app_id === params.appId
-        ? { ...a, status: 'revoked' as const, revoked_at: new Date().toISOString() }
+        ? {
+            ...a,
+            status: 'revoked' as const,
+            health: null,
+            revoked_at: new Date().toISOString(),
+          }
         : a,
     )
     const found = appsState.find((a) => a.app_id === params.appId)

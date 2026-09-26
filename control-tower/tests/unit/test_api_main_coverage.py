@@ -196,6 +196,94 @@ def test_revoke_nonexistent_application(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
+def _assert_no_key_secrets(view: dict) -> None:
+    assert "key_hash" not in view
+    assert "key_prefix" not in view
+    assert "key_last4" not in view
+    # Plaintext api_key only on create — callers of this helper should pass
+    # list/patch/heartbeat/revoke bodies.
+    assert "api_key" not in view
+
+
+def test_create_application_defaults_inventory_fields(client: TestClient) -> None:
+    """Existing clients omitting inventory fields still get safe defaults."""
+    resp = client.post(
+        "/applications",
+        json={"name": "Minimal App", "process": "procurement_review"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["owner"] is None
+    assert body["team"] is None
+    assert body["description"] is None
+    assert body["framework"] is None
+    assert body["runtime"] is None
+    assert body["tools"] == []
+    assert body["capabilities"] == []
+    assert body["mcp_servers"] == []
+    assert body["last_seen_at"] is None
+    assert body["last_seen"] is None
+    assert body["health"] == "never_seen"
+    assert "api_key" in body
+    assert "key_hash" not in body
+
+
+def test_create_application_with_inventory_metadata(client: TestClient) -> None:
+    resp = client.post(
+        "/applications",
+        json={
+            "name": "Inventory App",
+            "process": "procurement_review",
+            "owner": "alice@example.com",
+            "team": "Platform",
+            "description": "Demo agent",
+            "framework": "langchain",
+            "runtime": "python3.12",
+            "tools": ["create_purchase_order"],
+            "capabilities": ["procure"],
+            "mcp_servers": [
+                {"name": "docs", "url": "http://127.0.0.1:3100", "tools": ["search"]}
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["owner"] == "alice@example.com"
+    assert body["team"] == "Platform"
+    assert body["framework"] == "langchain"
+    assert body["tools"] == ["create_purchase_order"]
+    assert body["mcp_servers"][0]["name"] == "docs"
+    list_resp = client.get("/applications")
+    listed = next(a for a in list_resp.json()["applications"] if a["app_id"] == body["app_id"])
+    _assert_no_key_secrets(listed)
+    assert listed["owner"] == "alice@example.com"
+
+
+def test_patch_application_inventory_when_auth_disabled(client: TestClient) -> None:
+    created = client.post(
+        "/applications",
+        json={"name": "Patch Me", "process": "procurement_review"},
+    ).json()
+    app_id = created["app_id"]
+    resp = client.patch(
+        f"/applications/{app_id}",
+        json={"owner": "bob@example.com", "tools": ["search_knowledge_base"]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["owner"] == "bob@example.com"
+    assert body["tools"] == ["search_knowledge_base"]
+    _assert_no_key_secrets(body)
+
+
+def test_list_applications_omits_key_secrets(client: TestClient) -> None:
+    resp = client.get("/applications")
+    assert resp.status_code == 200
+    for app in resp.json()["applications"]:
+        _assert_no_key_secrets(app)
+        assert "key_display" in app
+
+
 def test_demo_tamper_enable(client: TestClient) -> None:
     """Test POST /audit/demo-tamper with enable=true."""
     # Submit a case first to have audit entries

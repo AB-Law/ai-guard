@@ -309,10 +309,42 @@ export interface CreateApplicationInput {
   environment: AppEnvironment
   process: string
   source_app?: string
+  owner?: string
+  team?: string
+  description?: string
+  framework?: string
+  runtime?: string
+  tools?: string[]
+  capabilities?: string[]
+  mcp_servers?: { name: string; url?: string | null; tools?: string[] }[]
 }
 
 export function createApplication(input: CreateApplicationInput): Promise<ApplicationWithKey> {
   return request('/applications', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export type UpdateApplicationInventoryInput = Partial<
+  Pick<
+    Application,
+    | 'owner'
+    | 'team'
+    | 'description'
+    | 'framework'
+    | 'runtime'
+    | 'tools'
+    | 'capabilities'
+    | 'mcp_servers'
+  >
+>
+
+export function updateApplicationInventory(
+  appId: string,
+  input: UpdateApplicationInventoryInput,
+): Promise<Application> {
+  return request(`/applications/${encodeURIComponent(appId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
 }
 
 export function revokeApplication(appId: string): Promise<Application> {
