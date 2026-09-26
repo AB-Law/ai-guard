@@ -50,6 +50,9 @@ class GatewayDecision(BaseModel):
     risk_score: int = Field(ge=0, le=100)
     confidence_score: float = Field(ge=0.0, le=1.0)
     evidence_score: float = Field(ge=0.0, le=1.0)
+    # Optional W3C trace id (hex) when OpenTelemetry is active — not part of
+    # the hash-chain; additive for clients that want to correlate logs.
+    trace_id: str | None = None
 
 
 class AuditLogEntry(BaseModel):
@@ -62,6 +65,8 @@ class AuditLogEntry(BaseModel):
     timestamp: str
     prev_hash: str
     entry_hash: str
+    # Non-hashed correlation to the active OTel trace (column, not payload).
+    trace_id: str | None = None
 
 
 InjectionSeverity = Literal["high", "medium", "low"]

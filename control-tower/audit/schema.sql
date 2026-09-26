@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
     scores_json TEXT,
     timestamp TEXT NOT NULL,
     prev_hash TEXT NOT NULL,
-    entry_hash TEXT NOT NULL
+    entry_hash TEXT NOT NULL,
+    trace_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_process ON audit_log(process);

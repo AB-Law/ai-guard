@@ -124,7 +124,7 @@ def test_get_approval_gets_the_guard_approvals_endpoint() -> None:
     assert result["status"] == "pending_approval"
     args, kwargs = mock_http.get.call_args
     assert args[0] == "http://example.test:9000/guard/approvals/c1"
-    assert kwargs["headers"] == {"Authorization": "Bearer sk_test_abc"}
+    assert kwargs["headers"]["Authorization"] == "Bearer sk_test_abc"
 
 
 def test_get_approval_omits_auth_header_when_no_api_key() -> None:
@@ -133,7 +133,8 @@ def test_get_approval_omits_auth_header_when_no_api_key() -> None:
     with patch("aiguard.client.httpx.Client", return_value=mock_http):
         GuardClient(api_url="http://example.test:9000").get_approval("c1")
 
-    assert mock_http.get.call_args.kwargs["headers"] == {}
+    headers = mock_http.get.call_args.kwargs["headers"]
+    assert "Authorization" not in headers
 
 
 def test_resolve_approval_posts_action_and_actor() -> None:
@@ -201,7 +202,7 @@ def test_heartbeat_posts_to_applications_heartbeat() -> None:
     assert result["health"] == "online"
     args, kwargs = mock_http.post.call_args
     assert args[0] == "http://example.test:9000/applications/heartbeat"
-    assert kwargs["headers"] == {"Authorization": "Bearer sk_test_abc"}
+    assert kwargs["headers"]["Authorization"] == "Bearer sk_test_abc"
 
 
 def test_update_inventory_patches_applications() -> None:
@@ -220,4 +221,22 @@ def test_update_inventory_patches_applications() -> None:
     assert args[0] == "PATCH"
     assert args[1] == "http://example.test:9000/applications/app_1"
     assert kwargs["json"] == {"owner": "alice", "tools": ["create_purchase_order"]}
-    assert kwargs["headers"] == {"Authorization": "Bearer sk_test_abc"}
+    assert kwargs["headers"]["Authorization"] == "Bearer sk_test_abc"
+
+
+def test_headers_inject_w3c_traceparent_when_span_active() -> None:
+    pytest.importorskip("opentelemetry")
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+
+    trace.set_tracer_provider(TracerProvider())
+    mock_http = MagicMock()
+    mock_http.post.return_value = _mock_response({"call_id": "1", "decision": "allow"})
+    with patch("aiguard.client.httpx.Client", return_value=mock_http):
+        client = GuardClient(api_url="http://example.test:9000", api_key="sk_test")
+        with trace.get_tracer("test").start_as_current_span("client"):
+            client.evaluate(tool_name="t")
+    headers = mock_http.post.call_args.kwargs["headers"]
+    assert headers["Authorization"] == "Bearer sk_test"
+    assert "traceparent" in headers
+    assert headers["traceparent"].startswith("00-")

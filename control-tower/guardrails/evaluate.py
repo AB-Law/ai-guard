@@ -164,6 +164,53 @@ def evaluate_tool_call(
     High-severity proposals are scheduled after the decision (BackgroundTasks
     when schedule_learning is provided); they never alter this decision.
     """
+    from telemetry.attrs import set_aegis_attributes
+    from telemetry.tracing import current_trace_id, start_span
+
+    with start_span(
+        "aegis.guard.evaluate",
+        attributes={
+            "call_id": request.call_id,
+            "process": request.process,
+            "case_id": request.case_id,
+        },
+    ) as span:
+        decision = _evaluate_tool_call_impl(
+            request,
+            config,
+            retrieved_texts=retrieved_texts,
+            context_chunks=context_chunks,
+            injection_flags=injection_flags,
+            retrieved_chunk_ids=retrieved_chunk_ids,
+            audit=audit,
+            stage_timings_ms=stage_timings_ms,
+            schedule_learning=schedule_learning,
+            case_store=case_store,
+        )
+        try:
+            set_aegis_attributes(span, decision=decision.decision)
+            tid = current_trace_id()
+            if tid and decision.trace_id is None:
+                decision = decision.model_copy(update={"trace_id": tid})
+        except Exception:  # noqa: BLE001, S110 — telemetry must not alter decisions
+            pass
+        return decision
+
+
+def _evaluate_tool_call_impl(
+    request: ToolCallRequest,
+    config: ProcessConfig,
+    *,
+    retrieved_texts: list[str] | None = None,
+    context_chunks: list[str] | None = None,
+    injection_flags: list[InjectionFlag] | None = None,
+    retrieved_chunk_ids: list[str] | None = None,
+    audit: AuditLogStore,
+    stage_timings_ms: dict[str, float] | None = None,
+    schedule_learning: Callable[[Callable[[], None]], None] | None = None,
+    case_store: Any | None = None,
+) -> GatewayDecision:
+    """Internal evaluate body (instrumented by evaluate_tool_call)."""
     t0 = time.perf_counter()
     timings: dict[str, float] = {} if stage_timings_ms is None else stage_timings_ms
 

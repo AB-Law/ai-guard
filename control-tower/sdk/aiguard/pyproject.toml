@@ -12,6 +12,8 @@ dependencies = [
 # AiGuardMiddleware needs langchain>=1.0 (langchain.agents.middleware);
 # AiGuardCallbackHandler only needs langchain-core. Both come with this extra.
 langchain = ["langchain-core", "langchain>=1.0"]
+# Optional: inject W3C traceparent on outbound /guard/* calls when a tracer is active.
+otel = ["opentelemetry-api"]
 dev = ["pytest>=8.0"]
 
 [build-system]

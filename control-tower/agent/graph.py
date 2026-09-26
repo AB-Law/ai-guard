@@ -24,6 +24,7 @@ from contracts.schemas import GatewayDecision, InjectionFlag, ToolCallRequest
 from guardrails import evaluate_tool_call
 from guardrails.injection_guard import scan
 from knowledge.rag import KnowledgeBase, build_kb_for_process
+from telemetry.tracing import start_span
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -408,7 +409,11 @@ def run_case(
     """Invoke graph; returns final state (may be interrupted)."""
     tid = thread_id or state["case_id"]
     config = {"configurable": {"thread_id": tid}}
-    return graph.invoke(state, config=config)
+    with start_span(
+        "aegis.case.run",
+        attributes={"case_id": tid, "process": state.get("process")},
+    ):
+        return graph.invoke(state, config=config)
 
 
 def resume_case(
@@ -419,10 +424,14 @@ def resume_case(
     actor: str,
 ) -> dict[str, Any]:
     config = {"configurable": {"thread_id": thread_id}}
-    return graph.invoke(
-        Command(resume={"action": action, "actor": actor}),
-        config=config,
-    )
+    with start_span(
+        "aegis.case.resume",
+        attributes={"case_id": thread_id},
+    ):
+        return graph.invoke(
+            Command(resume={"action": action, "actor": actor}),
+            config=config,
+        )
 
 
 def is_interrupted(result: dict[str, Any]) -> bool:

@@ -76,7 +76,17 @@ class GuardClient:
         return resp.json()
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        headers: dict[str, str] = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        # W3C trace-context (traceparent / tracestate) when OpenTelemetry is installed.
+        try:
+            from opentelemetry.propagate import inject
+
+            inject(headers)
+        except ImportError:
+            pass
+        return headers
 
     def get_approval(self, call_id: str) -> dict[str, Any]:
         """Status of a call submitted via evaluate(). Returns
