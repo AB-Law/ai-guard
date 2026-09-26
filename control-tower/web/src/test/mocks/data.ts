@@ -6,6 +6,7 @@ import type {
   CaseRecord,
   ConfigsResponse,
   TrafficRecentResponse,
+  OpsMetricsSnapshot,
 } from '../../lib/types'
 
 export const gatewayAllow = {
@@ -311,4 +312,57 @@ export function caseAudit(caseId: string) {
     entries: auditEntries.filter((e) => (e.payload as { case_id?: string }).case_id === caseId),
     chain_valid: true,
   }
+}
+
+export const opsMetricsEmpty: OpsMetricsSnapshot = {
+  requests: { total: 0, by_route: [], by_outcome: {} },
+  guards: {
+    decisions: { allow: 0, block: 0, escalate: 0 },
+    avg_latency_ms: null,
+    errors: 0,
+    evaluations: 0,
+  },
+  approvals: { approved: 0, denied: 0, error: 0 },
+  model: {
+    usage_available: false,
+    pricing_configured: false,
+    prompt_tokens: null,
+    completion_tokens: null,
+    estimated_cost_usd: null,
+    estimated_cost_is_estimate: true,
+    calls_with_usage: 0,
+    calls_without_usage: 0,
+    unavailable_reason: 'provider_usage_metadata_unavailable',
+  },
+  generated_at_ms: 1_700_000_000_000,
+}
+
+export const opsMetricsPopulated: OpsMetricsSnapshot = {
+  requests: {
+    total: 12,
+    by_route: [
+      { route: '/guard/evaluate', count: 8, avg_duration_ms: 42.5 },
+      { route: '/health', count: 4, avg_duration_ms: 1.2 },
+    ],
+    by_outcome: { ok: 11, client_error: 1 },
+  },
+  guards: {
+    decisions: { allow: 5, block: 2, escalate: 1 },
+    avg_latency_ms: 38.4,
+    errors: 0,
+    evaluations: 8,
+  },
+  approvals: { approved: 1, denied: 0, error: 0 },
+  model: {
+    usage_available: true,
+    pricing_configured: true,
+    prompt_tokens: 1200,
+    completion_tokens: 300,
+    estimated_cost_usd: 0.006,
+    estimated_cost_is_estimate: true,
+    calls_with_usage: 3,
+    calls_without_usage: 1,
+    unavailable_reason: null,
+  },
+  generated_at_ms: 1_700_000_000_100,
 }

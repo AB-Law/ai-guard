@@ -246,6 +246,7 @@ What a production version changes, stated explicitly so the "credible path to sc
 - Process configs → versioned and owned per business unit, with RBAC on who can edit thresholds
 - Tool gateway → deployed as a sidecar/proxy pattern, reusable in front of any agent framework, not just this one
 - OpenTelemetry tracing for production observability (optional; see README "Observability")
+- Operational metrics (Prometheus `/metrics`, optional OTLP metrics, Ops metrics dashboard) — bounded labels only; token/cost only when provider usage + pricing config exist
 - CI/CD and infra-as-code for the config repository, so policy changes go through the same review process as code
 
 ---
@@ -269,7 +270,7 @@ control-tower/
 ├── audit/
 │   ├── log_store.py           # SQLite + hash chain
 │   └── schema.sql
-├── telemetry/                 # optional OpenTelemetry (no-op when disabled)
+├── telemetry/                 # optional OpenTelemetry + operational metrics
 ├── data/
 │   ├── procurement_policy.md
 │   ├── vendor_master.csv

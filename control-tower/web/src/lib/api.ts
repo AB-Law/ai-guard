@@ -13,6 +13,7 @@ import type {
   ConfigsResponse,
   ProcessConfig,
   TrafficRecentResponse,
+  OpsMetricsSnapshot,
 } from './types'
 
 const BASE = '/api'
@@ -365,4 +366,8 @@ export async function uploadDocument(file: File, process: string): Promise<{ ok:
     throw new Error(`upload failed: ${res.status} ${detail}`)
   }
   return res.json()
+}
+
+export function opsMetrics(): Promise<OpsMetricsSnapshot> {
+  return request('/ops/metrics')
 }

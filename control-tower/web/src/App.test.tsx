@@ -32,6 +32,9 @@ describe('App routing integration', () => {
     await user.click(screen.getByTitle('Audit & Integrity'))
     await waitFor(() => expect(screen.getByText('Audit & integrity')).toBeInTheDocument())
 
+    await user.click(screen.getByTitle('Ops metrics'))
+    await waitFor(() => expect(screen.getByText('Operational metrics')).toBeInTheDocument())
+
     await user.click(screen.getByTitle('Config'))
     await waitFor(() => expect(screen.getByText(/Config & knowledge base/i)).toBeInTheDocument())
 
