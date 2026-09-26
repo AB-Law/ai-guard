@@ -187,3 +187,37 @@ def test_wait_for_decision_times_out_while_still_pending() -> None:
         client = GuardClient(api_url="http://example.test:9000")
         with pytest.raises(TimeoutError):
             client.wait_for_decision("c1", poll_interval=0.01, timeout=0.03)
+
+
+def test_heartbeat_posts_to_applications_heartbeat() -> None:
+    mock_http = MagicMock()
+    mock_http.post.return_value = _mock_response(
+        {"app_id": "app_1", "last_seen_at": "2026-01-01T00:00:00+00:00", "health": "online"}
+    )
+    with patch("aiguard.client.httpx.Client", return_value=mock_http):
+        client = GuardClient(api_url="http://example.test:9000", api_key="sk_test_abc")
+        result = client.heartbeat()
+
+    assert result["health"] == "online"
+    args, kwargs = mock_http.post.call_args
+    assert args[0] == "http://example.test:9000/applications/heartbeat"
+    assert kwargs["headers"] == {"Authorization": "Bearer sk_test_abc"}
+
+
+def test_update_inventory_patches_applications() -> None:
+    mock_http = MagicMock()
+    mock_http.request.return_value = _mock_response(
+        {"app_id": "app_1", "owner": "alice", "tools": ["create_purchase_order"]}
+    )
+    with patch("aiguard.client.httpx.Client", return_value=mock_http):
+        client = GuardClient(api_url="http://example.test:9000", api_key="sk_test_abc")
+        result = client.update_inventory(
+            "app_1", owner="alice", tools=["create_purchase_order"]
+        )
+
+    assert result["owner"] == "alice"
+    args, kwargs = mock_http.request.call_args
+    assert args[0] == "PATCH"
+    assert args[1] == "http://example.test:9000/applications/app_1"
+    assert kwargs["json"] == {"owner": "alice", "tools": ["create_purchase_order"]}
+    assert kwargs["headers"] == {"Authorization": "Bearer sk_test_abc"}

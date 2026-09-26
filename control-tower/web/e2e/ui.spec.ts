@@ -171,12 +171,18 @@ async function mockApi(page: Page) {
         process: 'procurement_review',
         source_app: 'e2e',
         status: 'connected',
+        health: 'never_seen',
         key_display: 'aeg_••••e2e',
         api_key: 'aeg_e2e_secret',
         created_at: caseRow.created_at,
         revoked_at: null,
         requests_today: 0,
+        last_seen_at: null,
         last_seen: null,
+        tools: [],
+        capabilities: [],
+        mcp_servers: [],
+        observed_tools: [],
       })
     }
     if (path.includes('/revoke')) {
@@ -187,11 +193,17 @@ async function mockApi(page: Page) {
         process: 'procurement_review',
         source_app: 'x',
         status: 'revoked',
+        health: null,
         key_display: 'aeg_••••',
         created_at: caseRow.created_at,
         revoked_at: caseRow.created_at,
         requests_today: 0,
+        last_seen_at: null,
         last_seen: null,
+        tools: [],
+        capabilities: [],
+        mcp_servers: [],
+        observed_tools: [],
       })
     }
     if (path.endsWith('/audit/verify')) return json({ valid: true, entry_count: 1, first_invalid_entry_id: null })

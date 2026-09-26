@@ -37,6 +37,11 @@ Key endpoints:
 | `POST` | `/guard/evaluate` | Evaluate one tool call from an external agent (no `/cases`, no graph) — what the `aiguard` SDK calls |
 | `GET` | `/guard/approvals/{call_id}` | Status of a `/guard/evaluate` call that escalated — dashboard (any) or the owning app's API key |
 | `POST` | `/guard/approvals/{call_id}` | Approve/reject a `/guard/evaluate` escalation — owning app's API key only, dashboard is view-only for these |
+| `POST` | `/applications` | Register an agent identity + API key (dashboard). Optional inventory metadata (owner, tools, declared MCP servers) |
+| `GET` | `/applications` | List registered applications with inventory, `last_seen_at`, and derived health |
+| `PATCH` | `/applications/{app_id}` | Update declared inventory metadata — dashboard (any) or owning app API key |
+| `POST` | `/applications/heartbeat` | Stamp `last_seen_at` for the authenticated application (API key only; no caller-supplied `source_app`) |
+| `POST` | `/applications/{app_id}/revoke` | Revoke an application's API key (dashboard) |
 | `POST` | `/investigate` | Ask the investigation assistant a question over the audit log |
 | `POST` | `/knowledge/documents` | Upload a `.md`/`.txt`/`.csv` doc — indexed into the live KB immediately, no restart |
 | `GET` | `/traffic/recent` | Recent cases with per-stage pipeline status, for the live traffic view |
@@ -63,6 +68,8 @@ curl -X POST http://127.0.0.1:8000/approvals/<call_id> \
 ```
 
 The API writes to `data/audit.db` by default (auto-created).
+
+**Agent inventory** (Applications page / `/applications`): optional owner/team/description, framework/runtime, declared tools/capabilities, and declared MCP servers are self-reported metadata. `last_seen_at` and health (`online`/`stale`/`offline`/`never_seen`) come only from authenticated heartbeats or API-key traffic — the tower does not discover or scan hosts for MCP servers.
 
 Ingest a new document live (no restart — indexed into the running agent's KB immediately):
 

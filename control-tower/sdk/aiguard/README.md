@@ -116,6 +116,24 @@ The tower's own dashboard **cannot resolve these** — that action is scoped to 
 
 Authorization in full: an application's own API key can `get_approval`/`resolve_approval` only calls it originated (`source_app` must match) — never another application's. A dashboard session token can `get_approval` (view) any call, but `resolve_approval` from a dashboard token is always a 403 for a guard_evaluate call. Either on an unknown `call_id` is a 404; resolving an already-resolved call is a 409.
 
+## Agent inventory
+
+Register an application via the tower dashboard (`POST /applications`) to get an API key. Optionally declare inventory metadata (owner, team, framework, tools, MCP servers). Declared MCP servers are **self-reported** — the tower does not scan your host for MCP connections.
+
+```python
+with GuardClient(api_key="sk_live_…") as client:
+    client.heartbeat()  # stamps last_seen_at for *this* key's application
+    client.update_inventory(
+        "app_abc123",
+        owner="alice@example.com",
+        framework="langchain",
+        tools=["create_purchase_order"],
+        mcp_servers=[{"name": "docs", "url": "http://127.0.0.1:3100", "tools": ["search"]}],
+    )
+```
+
+Authenticated `/guard/evaluate` traffic also updates `last_seen_at`. Health (`online` / `stale` / `offline` / `never_seen`) is derived only from that timestamp.
+
 ## Roadmap (not built yet)
 
 - Raw OpenAI SDK interception (`chat.completions.create` wrapping) — LangChain has a first-class `on_tool_start` hook; OpenAI's SDK doesn't, so this needs custom parsing of `tool_calls` out of responses.

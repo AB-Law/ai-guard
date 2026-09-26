@@ -125,6 +125,7 @@ def test_revoked_key_is_rejected(client: TestClient) -> None:
         f"/applications/{app_id}/revoke", headers=_auth_headers(dashboard_token)
     )
     assert revoke.status_code == 200
+    assert revoke.json()["health"] is None
 
     resp = client.post(
         "/guard/evaluate",
@@ -132,3 +133,105 @@ def test_revoked_key_is_rejected(client: TestClient) -> None:
         headers=_auth_headers(api_key),
     )
     assert resp.status_code == 401
+
+
+def test_heartbeat_bound_to_authenticated_application(client: TestClient) -> None:
+    dashboard_token = _login(client)
+    created = client.post(
+        "/applications",
+        json={"name": "Heartbeat Agent", "process": "finance", "source_app": "hb_app"},
+        headers=_auth_headers(dashboard_token),
+    ).json()
+    api_key = created["api_key"]
+    app_id = created["app_id"]
+    assert created["last_seen_at"] is None
+    assert "key_hash" not in created
+
+    hb = client.post("/applications/heartbeat", headers=_auth_headers(api_key))
+    assert hb.status_code == 200, hb.text
+    body = hb.json()
+    assert body["app_id"] == app_id
+    assert body["last_seen_at"] is not None
+    assert body["last_seen"] == body["last_seen_at"]
+    assert body["health"] == "online"
+    assert "api_key" not in body
+    assert "key_hash" not in body
+    # No way to spoof another app via body — endpoint accepts no source_app.
+    assert client.post(
+        "/applications/heartbeat",
+        json={"source_app": "someone_else"},
+        headers=_auth_headers(api_key),
+    ).json()["app_id"] == app_id
+
+
+def test_authenticated_evaluate_updates_last_seen_at(client: TestClient) -> None:
+    dashboard_token = _login(client)
+    created = client.post(
+        "/applications",
+        json={"name": "Seen Agent", "process": "finance", "source_app": "seen_app"},
+        headers=_auth_headers(dashboard_token),
+    ).json()
+    api_key = created["api_key"]
+    app_id = created["app_id"]
+
+    resp = client.post(
+        "/guard/evaluate",
+        json={
+            "process": "finance",
+            "tool_name": "submit_expense_report",
+            "tool_args": {"employee_id": "E-1", "amount": 10, "item": "Pens"},
+            "agent_rationale": "Under threshold.",
+        },
+        headers=_auth_headers(api_key),
+    )
+    assert resp.status_code == 200, resp.text
+
+    listed = client.get("/applications", headers=_auth_headers(dashboard_token)).json()
+    row = next(a for a in listed["applications"] if a["app_id"] == app_id)
+    assert row["last_seen_at"] is not None
+    assert row["health"] == "online"
+    assert "key_hash" not in row
+    assert "api_key" not in row
+
+
+def test_patch_inventory_ownership(client: TestClient) -> None:
+    dashboard_token = _login(client)
+    a = client.post(
+        "/applications",
+        json={"name": "Owner A", "process": "finance", "source_app": "owner_a"},
+        headers=_auth_headers(dashboard_token),
+    ).json()
+    b = client.post(
+        "/applications",
+        json={"name": "Owner B", "process": "rag_bot", "source_app": "owner_b"},
+        headers=_auth_headers(dashboard_token),
+    ).json()
+
+    # Own key may patch own inventory.
+    own = client.patch(
+        f"/applications/{a['app_id']}",
+        json={"owner": "alice", "framework": "langgraph"},
+        headers=_auth_headers(a["api_key"]),
+    )
+    assert own.status_code == 200, own.text
+    assert own.json()["owner"] == "alice"
+    assert "api_key" not in own.json()
+    assert "key_hash" not in own.json()
+
+    # Other app's key cannot patch.
+    cross = client.patch(
+        f"/applications/{a['app_id']}",
+        json={"owner": "eve"},
+        headers=_auth_headers(b["api_key"]),
+    )
+    assert cross.status_code == 403
+
+    # Dashboard may patch any.
+    dash = client.patch(
+        f"/applications/{b['app_id']}",
+        json={"team": "Risk", "tools": ["search_knowledge_base"]},
+        headers=_auth_headers(dashboard_token),
+    )
+    assert dash.status_code == 200, dash.text
+    assert dash.json()["team"] == "Risk"
+    assert dash.json()["tools"] == ["search_knowledge_base"]

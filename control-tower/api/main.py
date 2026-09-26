@@ -96,6 +96,11 @@ def _mask_key(key_prefix: str, key_last4: str) -> str:
     return f"{key_prefix}{'•' * 8}{key_last4}"
 
 
+# Activity health derived only from last_seen_at (heartbeats / authenticated traffic).
+_HEALTH_ONLINE_SECONDS = 5 * 60
+_HEALTH_STALE_SECONDS = 24 * 60 * 60
+
+
 def _parse_created_at(value: Any) -> datetime | None:
     """Parse CaseStore created_at ISO strings; None if missing/unparseable."""
     if value is None:
@@ -111,6 +116,54 @@ def _parse_created_at(value: Any) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return dt
+
+
+def _inventory_defaults(
+    *,
+    owner: str | None = None,
+    team: str | None = None,
+    description: str | None = None,
+    framework: str | None = None,
+    runtime: str | None = None,
+    tools: list[str] | None = None,
+    capabilities: list[str] | None = None,
+    mcp_servers: list[dict[str, Any]] | list[DeclaredMcpServer] | None = None,
+) -> dict[str, Any]:
+    servers: list[dict[str, Any]] = []
+    for item in mcp_servers or []:
+        if isinstance(item, DeclaredMcpServer):
+            servers.append(item.model_dump())
+        else:
+            servers.append(dict(item))
+    return {
+        "owner": owner,
+        "team": team,
+        "description": description,
+        "framework": framework,
+        "runtime": runtime,
+        "tools": list(tools or []),
+        "capabilities": list(capabilities or []),
+        "mcp_servers": servers,
+        "last_seen_at": None,
+    }
+
+
+def _derive_health(status: str, last_seen_at: str | None, *, now: datetime | None = None) -> str | None:
+    """Health from observed activity only; revoked apps have no health."""
+    if status == "revoked":
+        return None
+    if not last_seen_at:
+        return "never_seen"
+    seen = _parse_created_at(last_seen_at)
+    if seen is None:
+        return "never_seen"
+    clock = now or datetime.now(UTC)
+    age = (clock - seen).total_seconds()
+    if age <= _HEALTH_ONLINE_SECONDS:
+        return "online"
+    if age <= _HEALTH_STALE_SECONDS:
+        return "stale"
+    return "offline"
 
 
 class CaseRequestBody(BaseModel):
@@ -154,18 +207,52 @@ class LoginBody(BaseModel):
     password: str = Field(min_length=1)
 
 
+class DeclaredMcpServer(BaseModel):
+    """Self-declared MCP connection — not discovered by scanning a host."""
+
+    name: str = Field(min_length=1)
+    url: str | None = None
+    tools: list[str] = Field(default_factory=list)
+
+
 class CreateApplicationBody(BaseModel):
     """Registers an agent identity with the tower — ARCHITECTURE §4.2's
     "no ambient tool access; every call allow-listed per process" starts with
     knowing which agent is calling. source_app defaults to a slug of name and
     is the value that agent should send as `source_app` on /cases and
     /guard/evaluate — that's how request stats below are attributed.
+
+    Optional inventory fields (owner, tools, mcp_servers, …) are declared
+    metadata only; omit them for backward-compatible registration.
     """
 
     name: str = Field(min_length=1)
     environment: Literal["production", "staging"] = "production"
     process: str
     source_app: str | None = None
+    owner: str | None = None
+    team: str | None = None
+    description: str | None = None
+    framework: str | None = None
+    runtime: str | None = None
+    tools: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
+    mcp_servers: list[DeclaredMcpServer] = Field(default_factory=list)
+
+
+class UpdateApplicationInventoryBody(BaseModel):
+    """Partial inventory update — omitted fields are left unchanged; empty
+    lists clear list-valued inventory fields.
+    """
+
+    owner: str | None = None
+    team: str | None = None
+    description: str | None = None
+    framework: str | None = None
+    runtime: str | None = None
+    tools: list[str] | None = None
+    capabilities: list[str] | None = None
+    mcp_servers: list[DeclaredMcpServer] | None = None
 
 
 class ProcessToolBody(BaseModel):
@@ -350,7 +437,8 @@ def create_app(
     def _app_stats(source_app: str) -> dict[str, Any]:
         today = datetime.now(UTC).date()
         requests_today = 0
-        last_seen: str | None = None
+        observed_tools: list[str] = []
+        seen_tools: set[str] = set()
         for rec in store.cases.values():
             if rec.get("source_app") != source_app:
                 continue
@@ -358,12 +446,15 @@ def create_app(
             created = _parse_created_at(created_raw)
             if created is not None and created.date() == today:
                 requests_today += 1
-            if created_raw and (last_seen is None or str(created_raw) > last_seen):
-                last_seen = str(created_raw)
-        return {"requests_today": requests_today, "last_seen": last_seen}
+            tool_name = rec.get("tool_name")
+            if tool_name and tool_name not in seen_tools:
+                seen_tools.add(str(tool_name))
+                observed_tools.append(str(tool_name))
+        return {"requests_today": requests_today, "observed_tools": observed_tools}
 
     def _application_view(record: dict[str, Any]) -> dict[str, Any]:
         stats = _app_stats(record["source_app"])
+        last_seen_at = record.get("last_seen_at")
         return {
             "app_id": record["app_id"],
             "name": record["name"],
@@ -371,11 +462,35 @@ def create_app(
             "process": record["process"],
             "source_app": record["source_app"],
             "status": record["status"],
+            "health": _derive_health(str(record.get("status") or ""), last_seen_at),
             "key_display": _mask_key(record["key_prefix"], record["key_last4"]),
             "created_at": record["created_at"],
             "revoked_at": record.get("revoked_at"),
+            "owner": record.get("owner"),
+            "team": record.get("team"),
+            "description": record.get("description"),
+            "framework": record.get("framework"),
+            "runtime": record.get("runtime"),
+            "tools": list(record.get("tools") or []),
+            "capabilities": list(record.get("capabilities") or []),
+            "mcp_servers": list(record.get("mcp_servers") or []),
+            "last_seen_at": last_seen_at,
+            # Alias for older clients / UI that still read last_seen.
+            "last_seen": last_seen_at,
             **stats,
         }
+
+    def _touch_application_seen(app_id: str | None) -> dict[str, Any] | None:
+        """Stamp last_seen_at from authenticated agent traffic / heartbeat."""
+        if not app_id:
+            return None
+        record = app.state.applications.get(app_id)
+        if record is None or record.get("status") == "revoked":
+            return record
+        updated = dict(record)
+        updated["last_seen_at"] = _utc_now()
+        app.state.applications[app_id] = updated
+        return updated
 
     def _write_demo_agent_key_file(source_app: str, api_key: str, process: str) -> None:
         """Plaintext keys are only ever visible at creation time (the API
@@ -423,6 +538,7 @@ def create_app(
                 "key_last4": api_key[-4:],
                 "created_at": _utc_now(),
                 "revoked_at": None,
+                **_inventory_defaults(),
             }
             _write_demo_agent_key_file(source_app, api_key, process)
 
@@ -452,7 +568,8 @@ def create_app(
             raise HTTPException(status_code=401, detail="invalid API key")
         if record.get("status") == "revoked":
             raise HTTPException(status_code=401, detail="API key revoked")
-        return {"type": "api_key", **record}
+        touched = _touch_application_seen(record.get("app_id")) or record
+        return {"type": "api_key", **touched}
 
     async def require_dashboard_token(request: Request) -> dict[str, Any]:
         """Dashboard-facing auth: Authorization: Bearer <jwt> issued via
@@ -1489,6 +1606,16 @@ def create_app(
             "key_last4": api_key[-4:],
             "created_at": _utc_now(),
             "revoked_at": None,
+            **_inventory_defaults(
+                owner=body.owner,
+                team=body.team,
+                description=body.description,
+                framework=body.framework,
+                runtime=body.runtime,
+                tools=body.tools,
+                capabilities=body.capabilities,
+                mcp_servers=body.mcp_servers,
+            ),
         }
         app.state.applications[app_id] = record
         view = _application_view(record)
@@ -1505,6 +1632,46 @@ def create_app(
             reverse=True,
         )
         return {"applications": [_application_view(r) for r in records]}
+
+    @app.patch("/applications/{app_id}")
+    def update_application_inventory(
+        app_id: str,
+        body: UpdateApplicationInventoryBody,
+        caller: dict[str, Any] = dashboard_or_api_key,
+    ) -> dict[str, Any]:
+        """Update declared inventory metadata. Dashboard may edit any app;
+        an API key may only edit its own registered identity.
+        """
+        record = app.state.applications.get(app_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="application not found")
+        if caller.get("type") == "api_key" and caller.get("app_id") != app_id:
+            raise HTTPException(status_code=403, detail="cannot update another application's inventory")
+        updated = dict(record)
+        payload = body.model_dump(exclude_unset=True)
+        for key, value in payload.items():
+            if key == "mcp_servers" and value is not None:
+                updated[key] = [
+                    item.model_dump() if isinstance(item, DeclaredMcpServer) else dict(item)
+                    for item in value
+                ]
+            else:
+                updated[key] = value
+        app.state.applications[app_id] = updated
+        return _application_view(updated)
+
+    @app.post("/applications/heartbeat")
+    def application_heartbeat(
+        caller: dict[str, Any] = api_key_required,
+    ) -> dict[str, Any]:
+        """Bound to the authenticated application — never accepts a caller-supplied source_app."""
+        app_id = caller.get("app_id")
+        if not app_id:
+            raise HTTPException(status_code=401, detail="missing API key")
+        touched = _touch_application_seen(app_id)
+        if touched is None:
+            raise HTTPException(status_code=404, detail="application not found")
+        return _application_view(touched)
 
     @app.post("/applications/{app_id}/revoke", dependencies=[Depends(require_dashboard_token)])
     def revoke_application(app_id: str) -> dict[str, Any]:
