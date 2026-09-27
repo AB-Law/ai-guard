@@ -37,7 +37,8 @@ jobs:
           uv venv --clear "$VIRTUAL_ENV"
           # scale = sqlite checkpoint saver used by storage e2e; postgres tests
           # stay skipped via -m 'not postgres'. SDK needed by simulated-app e2e.
-          uv pip install -e ".[dev,scale]" -e "./sdk/aiguard[langchain]"
+          # corpora = agentdojo, used only by eval_injection_corpora.py below.
+          uv pip install -e ".[dev,scale,corpora]" -e "./sdk/aiguard[langchain]"
 
       - name: Ruff
         run: $VIRTUAL_ENV/bin/ruff check .
@@ -48,6 +49,27 @@ jobs:
         run: |
           $VIRTUAL_ENV/bin/python scripts/eval_evidence_docs.py --write reports/evidence_docs_eval.md
           git diff --exit-code -- reports/evidence_docs_eval.md
+
+      - name: Cache injection corpora HTTP fetches
+        uses: actions/cache@v4
+        with:
+          path: control-tower/.cache/injection_corpora
+          # Keyed on the loader source, not a date — these are static
+          # published benchmark corpora, so a hit skips the HF/GitHub fetch
+          # entirely until the fetch logic itself changes. To force a
+          # refresh sooner (e.g. an upstream corpus update), bump the "v1"
+          # suffix below.
+          key: injection-corpora-v1-${{ hashFiles('control-tower/scripts/injection_corpora_lib.py') }}
+
+      - name: Injection corpora eval report
+        # Live-fetches deepset/prompt-injections, InjecAgent, and AgentDojo
+        # (cached above) and regenerates the checked-in report; fails if it
+        # drifts. Metrics are visible in reports/injection_corpora_eval.md —
+        # not asserted, since they depend on data neither Aegis nor this
+        # repo controls the exact contents of.
+        run: |
+          $VIRTUAL_ENV/bin/python scripts/eval_injection_corpora.py --write reports/injection_corpora_eval.md
+          git diff --exit-code -- reports/injection_corpora_eval.md
 
       - name: Pytest (offline suite, ≥90% coverage)
         # addopts already excludes @pytest.mark.live and @pytest.mark.postgres.

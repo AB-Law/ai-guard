@@ -57,6 +57,10 @@ data/demo_agent_keys/
 # Local LLM benchmark outputs (regenerate with scripts/benchmark_local_llm.py)
 reports/models/
 
+# Disk cache for scripts/eval_injection_corpora.py's HTTP fetches (restored
+# via actions/cache in CI; harmless to delete locally to force a refresh)
+.cache/
+
 # OS / IDE
 .DS_Store
 Thumbs.db

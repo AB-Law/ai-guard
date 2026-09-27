@@ -36,6 +36,11 @@ scale = [
     "langgraph-checkpoint-postgres",
     "psycopg[binary]",
 ]
+# Only needed by scripts/eval_injection_corpora.py, to pull AgentDojo's
+# injection-task goals. Not required for normal dev/test.
+corpora = [
+    "agentdojo",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
