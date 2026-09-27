@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -339,34 +338,85 @@ def build_graph(
 
 
 def _live_propose(state: AgentState, config: ProcessConfig) -> ProposedToolPlan:
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY is required when mock_agent_plan is not provided"
-        )
+    from guardrails.llm import get_chat_openai
 
-    from langchain_openai import ChatOpenAI
-
-    model_name = os.environ.get("OPENAI_MODEL", "gpt-4o")
-    # Some models (e.g. gpt-5 / o-series) reject temperature=0; use default.
-    llm = ChatOpenAI(model=model_name, api_key=api_key)
-    structured = llm.with_structured_output(ProposedToolPlan, method="function_calling")
     allowed = [t.name for t in config.allowed_tools]
+    properties = {
+        "vendor_id": {"type": "string"},
+        "applicant_id": {"type": "string"},
+        "amount": {"type": "number"},
+        "item": {"type": "string"},
+        "call_id": {"type": "string"},
+        "reason": {"type": "string"},
+        "agent_rationale": {"type": "string"},
+        "context_refs": {"type": "array", "items": {"type": "string"}},
+    }
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "description": (
+                    f"Propose the {tool_name} action. AI Guard will evaluate this "
+                    "proposal against policy before it can execute."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "additionalProperties": False,
+                },
+            },
+        }
+        for tool_name in allowed
+    ]
+    llm = get_chat_openai().bind_tools(tools, parallel_tool_calls=False)
     user = build_user_prompt(
         process=state["process"],
         request=dict(state["request"]),
         chunks=list(state.get("chunks") or []),
         allowed_tools=allowed,
     )
-    result = structured.invoke(
+    response = llm.invoke(
         [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user},
         ]
     )
-    if isinstance(result, ProposedToolPlan):
-        return result
-    return ProposedToolPlan.model_validate(result)
+    tool_calls = getattr(response, "tool_calls", None) or []
+    if len(tool_calls) != 1:
+        raise RuntimeError(
+            "The model must propose exactly one allowed action as a tool call; "
+            f"received {len(tool_calls)}."
+        )
+
+    tool_call = tool_calls[0]
+    tool_name = tool_call.get("name")
+    if tool_name not in allowed:
+        raise ValueError(f"The model proposed a tool not allowed for this process: {tool_name!r}")
+
+    raw_args = dict(tool_call.get("args") or {})
+    rationale = str(raw_args.pop("agent_rationale", "")).strip()
+    if not rationale:
+        rationale = f"The model selected {tool_name}; it did not provide a rationale."
+
+    retrieved_ids = [chunk["id"] for chunk in (state.get("chunks") or []) if chunk.get("id")]
+    valid_refs: list[str] = []
+    for ref in raw_args.pop("context_refs", []) or []:
+        if not isinstance(ref, str):
+            continue
+        if ref in retrieved_ids:
+            valid_refs.append(ref)
+            continue
+        suffix_matches = [chunk_id for chunk_id in retrieved_ids if chunk_id.endswith(ref)]
+        if len(suffix_matches) == 1:
+            valid_refs.append(suffix_matches[0])
+
+    return ProposedToolPlan(
+        tool_name=tool_name,
+        tool_args=ToolArgs.model_validate(raw_args),
+        agent_rationale=rationale,
+        context_refs=valid_refs,
+    )
 
 
 def initial_state(

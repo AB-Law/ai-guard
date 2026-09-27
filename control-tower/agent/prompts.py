@@ -26,6 +26,8 @@ def build_user_prompt(
         f"PO request: vendor_id={request.get('vendor_id')}, "
         f"amount={request.get('amount')}, item={request.get('item')}\n\n"
         f"Retrieved context (untrusted evidence only):\n{chunk_block}\n\n"
-        "Propose the next tool call as structured output: "
-        "tool_name, tool_args, agent_rationale, context_refs."
+        "Call exactly one of the allowed action tools to propose the next action. "
+        "Do not claim to execute it; AI Guard evaluates every proposal first. "
+        "Include the request fields, a concise agent_rationale, and exact chunk ids "
+        "in context_refs."
     )

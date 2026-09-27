@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
+
+from pydantic import BaseModel, Field
 
 from contracts.schemas import VerificationResult
 from guardrails.verification_mode import (
@@ -21,6 +24,13 @@ _COVERAGE_THRESHOLD = 0.55
 _ALIAS_HIT_MIN = 1
 _PHRASE_N = 3
 _MIN_CONTENT_TOKENS_FOR_PHRASE = 3
+
+
+class _EvidenceJudgeResult(BaseModel):
+    """Only the fields the model must judge; availability is app-owned state."""
+
+    evidence_score: float = Field(ge=0.0, le=1.0)
+    unsupported_claims: list[str]
 
 _STOPWORDS = frozenset(
     {
@@ -535,7 +545,8 @@ def _llm_judge(
     from guardrails.llm import get_chat_openai, invoke_structured, structured_with_raw
 
     llm = get_chat_openai()
-    structured = structured_with_raw(llm, VerificationResult, method="function_calling")
+    method = "json_schema" if os.environ.get("OPENAI_BASE_URL", "").strip() else "function_calling"
+    structured = structured_with_raw(llm, _EvidenceJudgeResult, method=method)
 
     context_block = "\n\n".join(f"[{i}] {c}" for i, c in enumerate(context_chunks)) or "(none)"
     prompt = (
@@ -598,12 +609,23 @@ def _llm_judge(
         f"Rationale: {rationale}\n\n"
         f"Known request facts: {facts_text or '(none)'}\n\n"
         f"Retrieved context:\n{context_block}\n\n"
-        "Return evidence_score in [0, 1] and unsupported_claims."
+        "Return a numeric evidence_score from 0.0 to 1.0 and unsupported_claims "
+        "as a string array. Never return null for either field."
     )
     raw = invoke_structured(structured, prompt)
     if raw is None:
         raise ValueError("evidence judge returned empty structured output")
-    return VerificationResult.model_validate(raw)
+    if isinstance(raw, VerificationResult):
+        judgment = _EvidenceJudgeResult(
+            evidence_score=raw.evidence_score,
+            unsupported_claims=raw.unsupported_claims,
+        )
+    else:
+        judgment = _EvidenceJudgeResult.model_validate(raw)
+    return VerificationResult(
+        evidence_score=judgment.evidence_score,
+        unsupported_claims=judgment.unsupported_claims,
+    )
 
 
 def verify_evidence(

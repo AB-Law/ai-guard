@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -168,16 +167,9 @@ def retrieve_investigation_context(
 
 
 def _live_answer(question: str, chunks: list[RetrievedChunk]) -> InvestigationAnswer:
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY is required when mock_answer is not provided"
-        )
+    from guardrails.llm import get_chat_openai
 
-    from langchain_openai import ChatOpenAI
-
-    model_name = os.environ.get("OPENAI_MODEL", "gpt-4o")
-    llm = ChatOpenAI(model=model_name, api_key=api_key)
+    llm = get_chat_openai()
     structured = llm.with_structured_output(InvestigationAnswer, method="function_calling")
 
     context_blocks = []

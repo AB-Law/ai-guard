@@ -8,32 +8,37 @@ from typing import Any
 
 _lock = threading.Lock()
 _llm: Any | None = None
-_llm_key: tuple[str, str] | None = None
+_llm_key: tuple[str, str, str | None] | None = None
 
 # Shared request timeout — long enough for parallel judge wall-clock; evidence
 # previously used 30s alone, but three concurrent judges share one client.
 _DEFAULT_TIMEOUT = 60.0
 
 
-def get_chat_openai() -> Any:
-    """Return a process-scoped ChatOpenAI for the current OPENAI_API_KEY/MODEL.
+def get_chat_openai(model_name: str | None = None) -> Any:
+    """Return a process-scoped ChatOpenAI for the configured compatible API.
 
-    Reconstructs when key or model env vars change (tests / configure flips).
+    Ollama's OpenAI-compatible endpoint ignores its API key, but the client
+    requires a non-empty value. Reconstruct the client when its settings change.
     """
     global _llm, _llm_key
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    base_url = os.environ.get("OPENAI_BASE_URL", "").strip() or None
+    if not api_key and base_url:
+        api_key = "ollama"
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
-    model_name = os.environ.get("OPENAI_MODEL", "gpt-4o")
-    key = (api_key, model_name)
+    selected_model = model_name or os.environ.get("OPENAI_MODEL", "gpt-4o")
+    key = (api_key, selected_model, base_url)
 
     with _lock:
         if _llm is None or _llm_key != key:
             from langchain_openai import ChatOpenAI
 
             _llm = ChatOpenAI(
-                model=model_name,
+                model=selected_model,
                 api_key=api_key,
+                base_url=base_url,
                 timeout=_DEFAULT_TIMEOUT,
             )
             _llm_key = key
