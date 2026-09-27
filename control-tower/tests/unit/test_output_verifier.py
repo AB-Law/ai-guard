@@ -184,7 +184,11 @@ def test_llm_judge_does_not_short_circuit_when_only_request_facts_are_present() 
     mock_llm.with_structured_output.return_value.invoke.return_value = fake_result
     with (
         patch("guardrails.llm.get_chat_openai", return_value=mock_llm) as mock_get,
-        patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-not-real"}),
+        patch.dict(
+            "os.environ",
+            {"OPENAI_API_KEY": "sk-test-not-real", "AEGIS_LLM_DECOMPOSE": "never"},
+            clear=False,
+        ),
     ):
         result = _llm_judge(
             "The amount is 2500.", [], request_facts={"vendor_id": "V-1001", "amount": 2500}
@@ -209,7 +213,11 @@ def test_llm_judge_prompt_includes_request_facts() -> None:
     mock_llm.with_structured_output.return_value.invoke.side_effect = _capture_invoke
     with (
         patch("guardrails.llm.get_chat_openai", return_value=mock_llm),
-        patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-not-real"}),
+        patch.dict(
+            "os.environ",
+            {"OPENAI_API_KEY": "sk-test-not-real", "AEGIS_LLM_DECOMPOSE": "never"},
+            clear=False,
+        ),
     ):
         _llm_judge(
             "The amount is 2500.",
@@ -218,6 +226,56 @@ def test_llm_judge_prompt_includes_request_facts() -> None:
         )
     assert "vendor_id=V-1001" in captured_prompt["value"]
     assert "amount=2500" in captured_prompt["value"]
+    assert "CRITICAL" not in captured_prompt["value"]
+
+
+def test_aggregate_claim_supports_scores_request_facts() -> None:
+    from guardrails.output_verifier import _aggregate_claim_supports, _ClaimSupportItem
+
+    result = _aggregate_claim_supports(
+        ["This PO is for amount 2500 against vendor V-1001."],
+        [
+            _ClaimSupportItem(
+                claim="This PO is for amount 2500 against vendor V-1001.",
+                support="request_facts",
+            )
+        ],
+    )
+    assert result.evidence_score == 1.0
+    assert result.unsupported_claims == []
+
+
+def test_llm_judge_decomposed_two_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from guardrails.llm import reset_chat_openai_cache
+    from guardrails.output_verifier import (
+        _ClaimExtraction,
+        _ClaimSupportBatch,
+        _ClaimSupportItem,
+        _llm_judge,
+    )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("AEGIS_LLM_DECOMPOSE", "always")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    reset_chat_openai_cache()
+
+    claim = "This PO is for amount 2500 against vendor V-1001."
+    responses = [
+        _ClaimExtraction(claims=[claim], content_free=False),
+        _ClaimSupportBatch(
+            judgments=[_ClaimSupportItem(claim=claim, support="request_facts")]
+        ),
+    ]
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value.invoke.side_effect = responses
+    with patch("guardrails.llm.get_chat_openai", return_value=mock_llm):
+        result = _llm_judge(
+            claim,
+            ["Risk score at or above 60 requires human sign-off."],
+            request_facts={"vendor_id": "V-1001", "amount": 2500},
+        )
+    assert result.evidence_score == 1.0
+    assert mock_llm.with_structured_output.call_count == 2
 
 
 def test_vacuous_rationale_scores_zero() -> None:

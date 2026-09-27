@@ -167,10 +167,10 @@ def retrieve_investigation_context(
 
 
 def _live_answer(question: str, chunks: list[RetrievedChunk]) -> InvestigationAnswer:
-    from guardrails.llm import get_chat_openai
+    from guardrails.llm import get_chat_openai, structured_output_method
 
     llm = get_chat_openai()
-    structured = llm.with_structured_output(InvestigationAnswer, method="function_calling")
+    structured = llm.with_structured_output(InvestigationAnswer, method=structured_output_method())
 
     context_blocks = []
     allowed_ids: list[str] = []

@@ -88,6 +88,7 @@ def test_llm_entail_injects_rubric_as_system_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    monkeypatch.setenv("AEGIS_LLM_DECOMPOSE", "never")
     reset_policy_entailment_rubric_cache()
     rubric = load_policy_entailment_rubric()
 
@@ -124,6 +125,7 @@ def test_llm_entail_coerces_noncompliant_none_to_soft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    monkeypatch.setenv("AEGIS_LLM_DECOMPOSE", "never")
     structured = MagicMock()
     structured.invoke.return_value = PolicyEntailmentResult(
         compliant=False,
@@ -140,3 +142,47 @@ def test_llm_entail_coerces_noncompliant_none_to_soft(
 
     assert result.compliant is False
     assert result.severity == "soft"
+
+
+def test_llm_entail_decomposed_classifies_then_judges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from guardrails.policy_entailment import _ActionShape
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    monkeypatch.setenv("AEGIS_LLM_DECOMPOSE", "always")
+
+    shape = _ActionShape(action_kind="escalate", seeks_human_review=True, notes="export")
+    final = PolicyEntailmentResult(compliant=True, violated_clauses=[], severity="none")
+    structured = MagicMock()
+    structured.invoke.side_effect = [shape, final]
+    llm = MagicMock()
+    bound = MagicMock()
+    llm.bind.return_value = bound
+    bound.with_structured_output.return_value = structured
+
+    with patch("guardrails.llm.get_chat_openai", return_value=llm):
+        req = _request().model_copy(
+            update={
+                "tool_name": "request_approval",
+                "tool_args": {
+                    "vendor_id": "V-1007",
+                    "amount": 4000,
+                    "reason": "export_control",
+                },
+                "agent_rationale": "Vendor country is KP; escalating.",
+            }
+        )
+        result = _llm_entail(
+            req,
+            [
+                "Vendor V-1007: status=active; country=KP",
+                "Restricted countries must be escalated for Trade Compliance.",
+            ],
+        )
+
+    assert result.compliant is True
+    assert bound.with_structured_output.call_count == 2
+    second_messages = structured.invoke.call_args_list[1].args[0]
+    assert isinstance(second_messages, list)
+    assert "Action shape" in second_messages[1].content

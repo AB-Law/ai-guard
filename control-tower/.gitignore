@@ -54,6 +54,9 @@ data/demo_agent_keys/
 # Streamlit secrets (keep config.toml)
 .streamlit/secrets.toml
 
+# Local LLM benchmark outputs (regenerate with scripts/benchmark_local_llm.py)
+reports/models/
+
 # OS / IDE
 .DS_Store
 Thumbs.db

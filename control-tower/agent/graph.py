@@ -338,7 +338,7 @@ def build_graph(
 
 
 def _live_propose(state: AgentState, config: ProcessConfig) -> ProposedToolPlan:
-    from guardrails.llm import get_chat_openai
+    from guardrails.llm import get_chat_openai, tool_binding_kwargs
 
     allowed = [t.name for t in config.allowed_tools]
     properties = {
@@ -369,7 +369,7 @@ def _live_propose(state: AgentState, config: ProcessConfig) -> ProposedToolPlan:
         }
         for tool_name in allowed
     ]
-    llm = get_chat_openai().bind_tools(tools, parallel_tool_calls=False)
+    llm = get_chat_openai().bind_tools(tools, **tool_binding_kwargs())
     user = build_user_prompt(
         process=state["process"],
         request=dict(state["request"]),
