@@ -30,6 +30,8 @@ services:
       DATABASE_URL: postgresql://aegis:aegis@db:5432/aegis
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      AEGIS_LLM_PROVIDER: ${AEGIS_LLM_PROVIDER:-}
     ports:
       - "8000:8000"
     depends_on:

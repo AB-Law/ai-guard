@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import * as api from './api'
 import { server } from '../test/mocks/server'
 import { http, HttpResponse } from 'msw'

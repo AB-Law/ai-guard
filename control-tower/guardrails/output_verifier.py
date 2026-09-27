@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from contracts.schemas import VerificationResult
 from guardrails.verification_mode import (
     PathMode,
@@ -21,6 +23,32 @@ _COVERAGE_THRESHOLD = 0.55
 _ALIAS_HIT_MIN = 1
 _PHRASE_N = 3
 _MIN_CONTENT_TOKENS_FOR_PHRASE = 3
+
+
+class _EvidenceJudgeResult(BaseModel):
+    """Only the fields the model must judge; availability is app-owned state."""
+
+    evidence_score: float = Field(ge=0.0, le=1.0)
+    unsupported_claims: list[str]
+
+
+class _ClaimExtraction(BaseModel):
+    """First pass of the decomposed evidence judge."""
+
+    claims: list[str]
+    content_free: bool = False
+
+
+class _ClaimSupportItem(BaseModel):
+    claim: str
+    support: str = Field(
+        description="One of: request_facts, context, unsupported",
+    )
+
+
+class _ClaimSupportBatch(BaseModel):
+    judgments: list[_ClaimSupportItem]
+
 
 _STOPWORDS = frozenset(
     {
@@ -506,39 +534,85 @@ def verify(
     return VerificationResult(evidence_score=score, unsupported_claims=unsupported)
 
 
-def _llm_judge(
-    rationale: str,
-    context_chunks: list[str],
-    *,
-    request_facts: dict[str, Any] | None = None,
+def _aggregate_claim_supports(
+    claims: list[str],
+    judgments: list[_ClaimSupportItem],
 ) -> VerificationResult:
-    """The real check: an LLM reads the rationale, the retrieved context, and
-    the tool call's own known facts, and judges whether each claim is
-    actually supported — semantic entailment, not token overlap. Catches
-    true-but-differently-worded claims the heuristic above misses, and isn't
-    fooled by claims that happen to share surface tokens with the context
-    without being supported by it (the failure mode that made the
-    heuristic's phrase/Jaccard matching unreliable in the first place).
+    """Map per-claim supports to evidence_score + unsupported_claims."""
+    by_claim = {j.claim.strip(): j.support.strip().lower() for j in judgments if j.claim.strip()}
+    unsupported: list[str] = []
+    supported = 0
+    for claim in claims:
+        key = claim.strip()
+        support = by_claim.get(key, "unsupported")
+        if support in {"request_facts", "context", "supported"}:
+            supported += 1
+        else:
+            unsupported.append(claim)
+    score = supported / max(len(claims), 1)
+    return VerificationResult(evidence_score=score, unsupported_claims=unsupported)
 
-    request_facts matters because some claims are about the request itself
-    ("the amount is 2500"), not about anything a retrieved policy/vendor doc
-    would ever state — without telling the judge what's already known by
-    construction, it correctly (and unhelpfully) flags those as
-    unsupported, since nothing in *retrieved context* confirms them either.
-    """
-    facts_text = _render_request_facts(request_facts)
-    if not rationale.strip():
-        return VerificationResult(evidence_score=1.0, unsupported_claims=[])
-    if not context_chunks and not facts_text:
-        return VerificationResult(evidence_score=0.0, unsupported_claims=_split_claims(rationale))
 
-    from guardrails.llm import get_chat_openai, invoke_structured, structured_with_raw
+def _decomposed_extract_prompt(rationale: str) -> str:
+    return (
+        "Split the agent rationale into atomic factual claims.\n"
+        "Rules:\n"
+        "- Prefer ONE claim per sentence. Do not split a sentence on 'and' / "
+        "'so' / 'therefore' / 'thus' when the parts share one subject.\n"
+        "- Keep premise+conclusion together when linked by so/therefore "
+        "(e.g. 'sits well under the ten-thousand-dollar auto-approve "
+        "ceiling, so it clears the spend band' → one claim).\n"
+        "- Keep certification/authorization assertions with any trailing "
+        "readiness language as ONE claim (e.g. 'Vendor V-1001 is ISO-9001 "
+        "certified and ready for immediate PO' → one claim, not two).\n"
+        "- Semicolon-separated clauses may be separate claims.\n"
+        "- If the rationale is pure approval language with no verifiable "
+        "facts (e.g. 'Approving this.', 'Looks good.'), set "
+        "content_free=true and claims=[].\n\n"
+        f"Rationale: {rationale}"
+    )
 
-    llm = get_chat_openai()
-    structured = structured_with_raw(llm, VerificationResult, method="function_calling")
 
-    context_block = "\n\n".join(f"[{i}] {c}" for i, c in enumerate(context_chunks)) or "(none)"
-    prompt = (
+def _decomposed_support_prompt(
+    claims: list[str],
+    *,
+    facts_text: str,
+    context_block: str,
+) -> str:
+    return (
+        "For each claim, set support to exactly one of:\n"
+        "- request_facts — the claim ONLY restates known request facts "
+        "(amount, vendor_id, applicant_id, etc.), even if retrieved "
+        "context is silent or about a different topic\n"
+        "- context — a retrieved chunk entails the claim by meaning, "
+        "including distant paraphrase. Examples that are context-"
+        "supported when the chunk states the $10k auto-approve rule:\n"
+        "  · 'sits well under the ten-thousand-dollar auto-approve ceiling'\n"
+        "  · 'clears the spend band' / 'clears the auto-approve band'\n"
+        "  · 'well under the $10k limit'\n"
+        "- unsupported — sources are silent, contradict the claim, OR the "
+        "claim invents a credential/certification/clearance/authorization "
+        "not stated in any source (ISO-9001, SOC 2, CFO pre-clearance, "
+        "etc.)\n\n"
+        "Hard rules:\n"
+        "- Do not infer certifications from status=active alone.\n"
+        "- If ANY part of a claim asserts a novel credential/clearance, "
+        "the ENTIRE claim is unsupported — never mark a 'vendor exists / "
+        "is active / ready for PO' stub as request_facts or context.\n"
+        "- Return one judgment per claim, using the claim text verbatim.\n\n"
+        f"Known request facts: {facts_text or '(none)'}\n\n"
+        f"Retrieved context:\n{context_block}\n\n"
+        "Claims:\n"
+        + "\n".join(f"- {c}" for c in claims)
+    )
+
+
+def _evidence_oneshot_prompt(
+    rationale: str,
+    facts_text: str,
+    context_block: str,
+) -> str:
+    return (
         "You are an evidence auditor for an AI agent governance system. An "
         "agent proposed a tool call and gave the rationale below. Split the "
         "rationale into atomic factual claims, then judge whether each is "
@@ -598,12 +672,121 @@ def _llm_judge(
         f"Rationale: {rationale}\n\n"
         f"Known request facts: {facts_text or '(none)'}\n\n"
         f"Retrieved context:\n{context_block}\n\n"
-        "Return evidence_score in [0, 1] and unsupported_claims."
+        "Return a numeric evidence_score from 0.0 to 1.0 and unsupported_claims "
+        "as a string array. Never return null for either field."
     )
-    raw = invoke_structured(structured, prompt)
+
+
+def _llm_judge_oneshot(
+    rationale: str,
+    context_chunks: list[str],
+    *,
+    facts_text: str,
+) -> VerificationResult:
+    from guardrails.llm import (
+        evidence_structured_output_method,
+        get_chat_openai,
+        invoke_structured,
+        structured_with_raw,
+    )
+
+    llm = get_chat_openai()
+    structured = structured_with_raw(
+        llm, _EvidenceJudgeResult, method=evidence_structured_output_method()
+    )
+    context_block = "\n\n".join(f"[{i}] {c}" for i, c in enumerate(context_chunks)) or "(none)"
+    raw = invoke_structured(
+        structured, _evidence_oneshot_prompt(rationale, facts_text, context_block)
+    )
     if raw is None:
         raise ValueError("evidence judge returned empty structured output")
-    return VerificationResult.model_validate(raw)
+    if isinstance(raw, VerificationResult):
+        judgment = _EvidenceJudgeResult(
+            evidence_score=raw.evidence_score,
+            unsupported_claims=raw.unsupported_claims,
+        )
+    else:
+        judgment = _EvidenceJudgeResult.model_validate(raw)
+    return VerificationResult(
+        evidence_score=judgment.evidence_score,
+        unsupported_claims=judgment.unsupported_claims,
+    )
+
+
+def _llm_judge_decomposed(
+    rationale: str,
+    context_chunks: list[str],
+    *,
+    facts_text: str,
+) -> VerificationResult:
+    """Two narrow LLM calls: extract claims, then label each claim's support."""
+    from guardrails.llm import (
+        evidence_structured_output_method,
+        get_chat_openai,
+        invoke_structured,
+        structured_with_raw,
+    )
+
+    llm = get_chat_openai()
+    method = evidence_structured_output_method()
+    context_block = "\n\n".join(f"[{i}] {c}" for i, c in enumerate(context_chunks)) or "(none)"
+
+    extract = structured_with_raw(llm, _ClaimExtraction, method=method)
+    extracted_raw = invoke_structured(extract, _decomposed_extract_prompt(rationale))
+    extracted = _ClaimExtraction.model_validate(extracted_raw)
+    if extracted.content_free or not extracted.claims:
+        return VerificationResult(
+            evidence_score=0.0,
+            unsupported_claims=[rationale.strip()] if rationale.strip() else [],
+        )
+
+    support = structured_with_raw(llm, _ClaimSupportBatch, method=method)
+    support_raw = invoke_structured(
+        support,
+        _decomposed_support_prompt(
+            extracted.claims,
+            facts_text=facts_text,
+            context_block=context_block,
+        ),
+    )
+    batch = _ClaimSupportBatch.model_validate(support_raw)
+    return _aggregate_claim_supports(extracted.claims, batch.judgments)
+
+
+def _llm_judge(
+    rationale: str,
+    context_chunks: list[str],
+    *,
+    request_facts: dict[str, Any] | None = None,
+) -> VerificationResult:
+    """The real check: an LLM reads the rationale, the retrieved context, and
+    the tool call's own known facts, and judges whether each claim is
+    actually supported — semantic entailment, not token overlap. Catches
+    true-but-differently-worded claims the heuristic above misses, and isn't
+    fooled by claims that happen to share surface tokens with the context
+    without being supported by it (the failure mode that made the
+    heuristic's phrase/Jaccard matching unreliable in the first place).
+
+    request_facts matters because some claims are about the request itself
+    ("the amount is 2500"), not about anything a retrieved policy/vendor doc
+    would ever state — without telling the judge what's already known by
+    construction, it correctly (and unhelpfully) flags those as
+    unsupported, since nothing in *retrieved context* confirms them either.
+
+    Hosted OpenAI uses a fast one-shot prompt. Local / compatible endpoints
+    use a decomposed two-step judge (extract claims → label support).
+    """
+    facts_text = _render_request_facts(request_facts)
+    if not rationale.strip():
+        return VerificationResult(evidence_score=1.0, unsupported_claims=[])
+    if not context_chunks and not facts_text:
+        return VerificationResult(evidence_score=0.0, unsupported_claims=_split_claims(rationale))
+
+    from guardrails.llm import use_decomposed_judges
+
+    if use_decomposed_judges():
+        return _llm_judge_decomposed(rationale, context_chunks, facts_text=facts_text)
+    return _llm_judge_oneshot(rationale, context_chunks, facts_text=facts_text)
 
 
 def verify_evidence(
