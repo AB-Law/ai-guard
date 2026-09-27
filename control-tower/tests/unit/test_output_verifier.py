@@ -245,6 +245,29 @@ def test_aggregate_claim_supports_scores_request_facts() -> None:
     assert result.unsupported_claims == []
 
 
+def test_decomposed_prompts_cover_qwen_failure_modes() -> None:
+    from guardrails.output_verifier import (
+        _decomposed_extract_prompt,
+        _decomposed_support_prompt,
+    )
+
+    extract = _decomposed_extract_prompt(
+        "This order sits well under the ten-thousand-dollar auto-approve "
+        "ceiling, so it clears the spend band."
+    )
+    assert "so/therefore" in extract
+    assert "ISO-9001" in extract
+
+    support = _decomposed_support_prompt(
+        ["Vendor V-1001 is ISO-9001 certified and ready for immediate PO."],
+        facts_text="vendor_id=V-1001; amount=2500",
+        context_block="[0] Vendor V-1001: status=active",
+    )
+    assert "clears the spend band" in support
+    assert "ENTIRE claim is unsupported" in support
+    assert "Do not infer certifications from status=active" in support
+
+
 def test_llm_judge_decomposed_two_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     from guardrails.llm import reset_chat_openai_cache
     from guardrails.output_verifier import (

@@ -553,6 +553,60 @@ def _aggregate_claim_supports(
     return VerificationResult(evidence_score=score, unsupported_claims=unsupported)
 
 
+def _decomposed_extract_prompt(rationale: str) -> str:
+    return (
+        "Split the agent rationale into atomic factual claims.\n"
+        "Rules:\n"
+        "- Prefer ONE claim per sentence. Do not split a sentence on 'and' / "
+        "'so' / 'therefore' / 'thus' when the parts share one subject.\n"
+        "- Keep premise+conclusion together when linked by so/therefore "
+        "(e.g. 'sits well under the ten-thousand-dollar auto-approve "
+        "ceiling, so it clears the spend band' → one claim).\n"
+        "- Keep certification/authorization assertions with any trailing "
+        "readiness language as ONE claim (e.g. 'Vendor V-1001 is ISO-9001 "
+        "certified and ready for immediate PO' → one claim, not two).\n"
+        "- Semicolon-separated clauses may be separate claims.\n"
+        "- If the rationale is pure approval language with no verifiable "
+        "facts (e.g. 'Approving this.', 'Looks good.'), set "
+        "content_free=true and claims=[].\n\n"
+        f"Rationale: {rationale}"
+    )
+
+
+def _decomposed_support_prompt(
+    claims: list[str],
+    *,
+    facts_text: str,
+    context_block: str,
+) -> str:
+    return (
+        "For each claim, set support to exactly one of:\n"
+        "- request_facts — the claim ONLY restates known request facts "
+        "(amount, vendor_id, applicant_id, etc.), even if retrieved "
+        "context is silent or about a different topic\n"
+        "- context — a retrieved chunk entails the claim by meaning, "
+        "including distant paraphrase. Examples that are context-"
+        "supported when the chunk states the $10k auto-approve rule:\n"
+        "  · 'sits well under the ten-thousand-dollar auto-approve ceiling'\n"
+        "  · 'clears the spend band' / 'clears the auto-approve band'\n"
+        "  · 'well under the $10k limit'\n"
+        "- unsupported — sources are silent, contradict the claim, OR the "
+        "claim invents a credential/certification/clearance/authorization "
+        "not stated in any source (ISO-9001, SOC 2, CFO pre-clearance, "
+        "etc.)\n\n"
+        "Hard rules:\n"
+        "- Do not infer certifications from status=active alone.\n"
+        "- If ANY part of a claim asserts a novel credential/clearance, "
+        "the ENTIRE claim is unsupported — never mark a 'vendor exists / "
+        "is active / ready for PO' stub as request_facts or context.\n"
+        "- Return one judgment per claim, using the claim text verbatim.\n\n"
+        f"Known request facts: {facts_text or '(none)'}\n\n"
+        f"Retrieved context:\n{context_block}\n\n"
+        "Claims:\n"
+        + "\n".join(f"- {c}" for c in claims)
+    )
+
+
 def _evidence_oneshot_prompt(
     rationale: str,
     facts_text: str,
@@ -678,17 +732,7 @@ def _llm_judge_decomposed(
     context_block = "\n\n".join(f"[{i}] {c}" for i, c in enumerate(context_chunks)) or "(none)"
 
     extract = structured_with_raw(llm, _ClaimExtraction, method=method)
-    extracted_raw = invoke_structured(
-        extract,
-        (
-            "Split the agent rationale into atomic factual claims "
-            "(one sentence or semicolon-separated clause each). "
-            "If the rationale is pure approval language with no "
-            "verifiable facts (e.g. 'Approving this.', 'Looks good.'), "
-            "set content_free=true and claims=[].\n\n"
-            f"Rationale: {rationale}"
-        ),
-    )
+    extracted_raw = invoke_structured(extract, _decomposed_extract_prompt(rationale))
     extracted = _ClaimExtraction.model_validate(extracted_raw)
     if extracted.content_free or not extracted.claims:
         return VerificationResult(
@@ -699,20 +743,10 @@ def _llm_judge_decomposed(
     support = structured_with_raw(llm, _ClaimSupportBatch, method=method)
     support_raw = invoke_structured(
         support,
-        (
-            "For each claim, set support to exactly one of:\n"
-            "- request_facts — the claim restates a known request fact "
-            "(amount, vendor_id, applicant_id, etc.), even if retrieved "
-            "context is silent or about a different topic\n"
-            "- context — a retrieved chunk entails the claim by meaning\n"
-            "- unsupported — sources are silent, contradict the claim, or "
-            "the claim invents a credential/clearance not in any source\n\n"
-            "Do not infer certifications from status=active alone.\n"
-            "Return one judgment per claim, using the claim text verbatim.\n\n"
-            f"Known request facts: {facts_text or '(none)'}\n\n"
-            f"Retrieved context:\n{context_block}\n\n"
-            "Claims:\n"
-            + "\n".join(f"- {c}" for c in extracted.claims)
+        _decomposed_support_prompt(
+            extracted.claims,
+            facts_text=facts_text,
+            context_block=context_block,
         ),
     )
     batch = _ClaimSupportBatch.model_validate(support_raw)
