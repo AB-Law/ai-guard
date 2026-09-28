@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +26,9 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+# Preserve any caller-supplied key, then blank by default so the checked-in
+# offline report stays deterministic. Scratch / live-LLM writes restore it.
+_INCOMING_OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
 os.environ["OPENAI_API_KEY"] = ""
 
 from guardrails import injection_guard
@@ -58,20 +62,46 @@ class Metrics:
         return self.tp / denom if denom else 1.0
 
 
-def evaluate(cases: list[CorpusCase]) -> Metrics:
+def _predict(case: CorpusCase) -> tuple[bool, bool]:
+    """Return (predicted_positive, label)."""
+    return bool(injection_guard.scan(case.text).flags), case.label
+
+
+def evaluate(cases: list[CorpusCase], *, workers: int = 1) -> Metrics:
     m = Metrics()
-    for case in cases:
-        pred = bool(injection_guard.scan(case.text).flags)
+    if not cases:
+        return m
+
+    workers = max(1, workers)
+    if workers == 1:
+        preds = [_predict(c) for c in cases]
+    else:
+        preds: list[tuple[bool, bool] | None] = [None] * len(cases)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_predict, c): i for i, c in enumerate(cases)}
+            for done, fut in enumerate(as_completed(futures), start=1):
+                idx = futures[fut]
+                preds[idx] = fut.result()
+                if done % 25 == 0 or done == len(cases):
+                    print(f"  … {done}/{len(cases)}", flush=True)
+
+    for pred, label in preds:  # type: ignore[misc]
         m.cases += 1
-        if pred and case.label:
+        if pred and label:
             m.tp += 1
-        elif pred and not case.label:
+        elif pred and not label:
             m.fp += 1
-        elif not pred and case.label:
+        elif not pred and label:
             m.fn += 1
         else:
             m.tn += 1
     return m
+
+
+def _cap(cases: list[CorpusCase], limit: int | None) -> list[CorpusCase]:
+    if limit is None or limit <= 0 or len(cases) <= limit:
+        return cases
+    return cases[:limit]
 
 
 def _row(name: str, m: Metrics, has_negatives: bool) -> str:
@@ -146,32 +176,57 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Always fetch fresh instead of reading/writing --cache-dir",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Cap cases per corpus (fast iteration / smoke runs). Default: all.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Parallel scan workers (use 4 for live LLM). Default: 1 (CI-safe).",
+    )
     args = parser.parse_args(argv)
     write_path = args.write if args.write.is_absolute() else _ROOT / args.write
     cache_dir = None if args.no_cache else args.cache_dir
 
+    # Live / scratch reports may exercise the LLM classifier when the caller
+    # supplied a key (and typically AEGIS_LLM_PROVIDER). The default CI path
+    # stays key-free so reports/injection_corpora_eval.md does not drift.
+    if write_path.resolve() != _DEFAULT_REPORT.resolve() and _INCOMING_OPENAI_KEY.strip():
+        os.environ["OPENAI_API_KEY"] = _INCOMING_OPENAI_KEY
+
+    workers = max(1, args.workers)
+    limit = args.limit
+
+    deepset = _cap(
+        fetch_deepset_prompt_injections(split="test", cache_dir=cache_dir), limit
+    )
+    injec = _cap(
+        fetch_injecagent_cases(file=args.injecagent_file, cache_dir=cache_dir),
+        limit,
+    )
+
+    print(f"workers={workers} limit={limit or 'all'}", flush=True)
+    print(f"evaluating deepset ({len(deepset)})…", flush=True)
     results: dict[str, tuple[Metrics, bool]] = {
-        "deepset/prompt-injections": (
-            evaluate(fetch_deepset_prompt_injections(split="test", cache_dir=cache_dir)),
-            True,
-        ),
-        "InjecAgent": (
-            evaluate(
-                fetch_injecagent_cases(file=args.injecagent_file, cache_dir=cache_dir)
-            ),
-            False,
-        ),
+        "deepset/prompt-injections": (evaluate(deepset, workers=workers), True),
     }
+    print(f"evaluating InjecAgent ({len(injec)})…", flush=True)
+    results["InjecAgent"] = (evaluate(injec, workers=workers), False)
 
     try:
-        agentdojo_cases = fetch_agentdojo_injection_cases()
+        agentdojo_cases = _cap(fetch_agentdojo_injection_cases(), limit)
     except ImportError:
         print(
             "agentdojo not installed — skipping (pip install -e '.[corpora]')",
             file=sys.stderr,
         )
     else:
-        results["AgentDojo"] = (evaluate(agentdojo_cases), False)
+        print(f"evaluating AgentDojo ({len(agentdojo_cases)})…", flush=True)
+        results["AgentDojo"] = (evaluate(agentdojo_cases, workers=workers), False)
 
     report = render_markdown(results)
     write_path.parent.mkdir(parents=True, exist_ok=True)
