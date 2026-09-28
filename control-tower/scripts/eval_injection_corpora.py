@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""Injection-detector regression report over live third-party corpora.
+
+Measures ``guardrails.injection_guard.scan()`` against deepset/prompt-injections,
+InjecAgent, and (if installed) AgentDojo. All three are fetched live — nothing
+is vendored, so this needs network access.
+
+``OPENAI_API_KEY`` is forced blank so the report always reflects the
+deterministic regex/learned-rule path, regardless of the local machine's
+.env — the same reasoning as tests/conftest.py's ``_isolate_openai_key``.
+Run manually with a configured LLM (e.g. ``AEGIS_LLM_PROVIDER=lmstudio``) to
+see the LLM-classifier numbers on stdout; they are not written to the
+checked-in report.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+# Preserve any caller-supplied key, then blank by default so the checked-in
+# offline report stays deterministic. Scratch / live-LLM writes restore it.
+_INCOMING_OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
+os.environ["OPENAI_API_KEY"] = ""
+
+from guardrails import injection_guard
+from scripts.injection_corpora_lib import (
+    CorpusCase,
+    fetch_agentdojo_injection_cases,
+    fetch_deepset_prompt_injections,
+    fetch_injecagent_cases,
+)
+
+_DEFAULT_REPORT = _ROOT / "reports" / "injection_corpora_eval.md"
+_DEFAULT_CACHE_DIR = _ROOT / ".cache" / "injection_corpora"
+
+
+@dataclass
+class Metrics:
+    cases: int = 0
+    tp: int = 0
+    fp: int = 0
+    fn: int = 0
+    tn: int = 0
+
+    @property
+    def precision(self) -> float:
+        denom = self.tp + self.fp
+        return self.tp / denom if denom else 1.0
+
+    @property
+    def recall(self) -> float:
+        denom = self.tp + self.fn
+        return self.tp / denom if denom else 1.0
+
+
+def _predict(case: CorpusCase) -> tuple[bool, bool]:
+    """Return (predicted_positive, label)."""
+    return bool(injection_guard.scan(case.text).flags), case.label
+
+
+def evaluate(cases: list[CorpusCase], *, workers: int = 1) -> Metrics:
+    m = Metrics()
+    if not cases:
+        return m
+
+    workers = max(1, workers)
+    if workers == 1:
+        preds = [_predict(c) for c in cases]
+    else:
+        preds: list[tuple[bool, bool] | None] = [None] * len(cases)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_predict, c): i for i, c in enumerate(cases)}
+            for done, fut in enumerate(as_completed(futures), start=1):
+                idx = futures[fut]
+                preds[idx] = fut.result()
+                if done % 25 == 0 or done == len(cases):
+                    print(f"  … {done}/{len(cases)}", flush=True)
+
+    for pred, label in preds:  # type: ignore[misc]
+        m.cases += 1
+        if pred and label:
+            m.tp += 1
+        elif pred and not label:
+            m.fp += 1
+        elif not pred and label:
+            m.fn += 1
+        else:
+            m.tn += 1
+    return m
+
+
+def _cap(cases: list[CorpusCase], limit: int | None) -> list[CorpusCase]:
+    if limit is None or limit <= 0 or len(cases) <= limit:
+        return cases
+    return cases[:limit]
+
+
+def _row(name: str, m: Metrics, has_negatives: bool) -> str:
+    if has_negatives:
+        return (
+            f"| {name} | {m.cases} | {m.tp} | {m.fp} | {m.fn} | {m.tn} "
+            f"| {m.precision:.4f} | {m.recall:.4f} |"
+        )
+    return f"| {name} | {m.cases} | {m.tp} | — | {m.fn} | — | — | {m.recall:.4f} |"
+
+
+def render_markdown(results: dict[str, tuple[Metrics, bool]]) -> str:
+    lines = [
+        "# Injection corpora eval",
+        "",
+        (
+            "Deterministic regex/learned-rule path only (`OPENAI_API_KEY` "
+            "forced blank) against third-party prompt-injection corpora, "
+            "fetched live over the network:"
+        ),
+        "",
+        (
+            "- **deepset/prompt-injections** — labeled clean/injection text; "
+            "has real negatives, so precision and recall both apply."
+        ),
+        (
+            "- **InjecAgent** — indirect injections embedded in tool-response "
+            "content (a contaminated tool result tries to redirect the "
+            "agent). Every row is a known attack — recall / detection-rate "
+            "only."
+        ),
+        (
+            "- **AgentDojo** — injection-task goals from its banking/travel/"
+            "workspace/slack suites, dropped into a generic tool-response "
+            "envelope (its own harness delivers them via a full simulated "
+            "environment we don't run here). Recall / detection-rate only. "
+            "Skipped if the optional `agentdojo` package isn't installed."
+        ),
+        "",
+        (
+            "Regenerated by `scripts/eval_injection_corpora.py` — do not "
+            "edit by hand; CI fails if this file drifts."
+        ),
+        "",
+        "## Summary",
+        "",
+        "| Corpus | Cases | TP | FP | FN | TN | Precision | Recall |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for name, (m, has_negatives) in results.items():
+        lines.append(_row(name, m, has_negatives))
+    lines.append("")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--write", type=Path, default=_DEFAULT_REPORT)
+    parser.add_argument(
+        "--injecagent-file",
+        default="test_cases_dh_base",
+        help="InjecAgent data/<name>.json file to pull cases from",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=_DEFAULT_CACHE_DIR,
+        help="Disk cache for fetched HTTP responses (restore via actions/cache in CI)",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Always fetch fresh instead of reading/writing --cache-dir",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Cap cases per corpus (fast iteration / smoke runs). Default: all.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Parallel scan workers (use 4 for live LLM). Default: 1 (CI-safe).",
+    )
+    args = parser.parse_args(argv)
+    write_path = args.write if args.write.is_absolute() else _ROOT / args.write
+    cache_dir = None if args.no_cache else args.cache_dir
+
+    # Live / scratch reports may exercise the LLM classifier when the caller
+    # supplied a key (and typically AEGIS_LLM_PROVIDER). The default CI path
+    # stays key-free so reports/injection_corpora_eval.md does not drift.
+    if write_path.resolve() != _DEFAULT_REPORT.resolve() and _INCOMING_OPENAI_KEY.strip():
+        os.environ["OPENAI_API_KEY"] = _INCOMING_OPENAI_KEY
+
+    workers = max(1, args.workers)
+    limit = args.limit
+
+    deepset = _cap(
+        fetch_deepset_prompt_injections(split="test", cache_dir=cache_dir), limit
+    )
+    injec = _cap(
+        fetch_injecagent_cases(file=args.injecagent_file, cache_dir=cache_dir),
+        limit,
+    )
+
+    print(f"workers={workers} limit={limit or 'all'}", flush=True)
+    print(f"evaluating deepset ({len(deepset)})…", flush=True)
+    results: dict[str, tuple[Metrics, bool]] = {
+        "deepset/prompt-injections": (evaluate(deepset, workers=workers), True),
+    }
+    print(f"evaluating InjecAgent ({len(injec)})…", flush=True)
+    results["InjecAgent"] = (evaluate(injec, workers=workers), False)
+
+    try:
+        agentdojo_cases = _cap(fetch_agentdojo_injection_cases(), limit)
+    except ImportError:
+        print(
+            "agentdojo not installed — skipping (pip install -e '.[corpora]')",
+            file=sys.stderr,
+        )
+    else:
+        print(f"evaluating AgentDojo ({len(agentdojo_cases)})…", flush=True)
+        results["AgentDojo"] = (evaluate(agentdojo_cases, workers=workers), False)
+
+    report = render_markdown(results)
+    write_path.parent.mkdir(parents=True, exist_ok=True)
+    write_path.write_text(report, encoding="utf-8", newline="\n")
+
+    for name, (m, _) in results.items():
+        print(f"{name}: cases={m.cases} P={m.precision:.4f} R={m.recall:.4f}")
+    print(f"wrote={write_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
